@@ -1,0 +1,21 @@
+CHAR_WHITESPACE = _{ " " | "\t" }
+NEWLINE = _{ "\n" | "\r\n" }
+WHITESPACE = _{ CHAR_WHITESPACE }
+double_newline = _{ NEWLINE{2} }
+
+vcc = { SOI ~ api_heading ~ (func_decl_with_description | obj_decl_with_description_and_methods)* ~ EOI }
+api_heading = @{ "API" ~ NEWLINE ~ "===" ~ double_newline }
+
+description = { (!double_newline ~ ANY)* }
+
+func_decl_with_description = { func_decl ~ double_newline ~ description }
+method_decl_with_description = { method_decl ~ double_newline ~ description }
+obj_decl_with_description_and_methods = { obj_decl ~ double_newline ~ description ~ double_newline ~ (method_decl_with_description ~ double_newline)+ }
+
+func_decl = { "$Function" ~ _type ~ ident ~ "(" ~ (func_arg ~ ("," ~ func_arg)*)? ~ ")" }
+method_decl = { "$Method" ~ _type ~ "." ~ ident ~ "(" ~ (func_arg ~ ("," ~ func_arg)*)? ~ ")" }
+obj_decl = { "$Object" ~ ident ~ "(" ~ ")" }
+
+func_arg = { _type ~ ident }
+_type = { ("BLOB" | "STRING" | "INT" | "BOOL") }
+ident = { (ASCII_ALPHANUMERIC | "_")+ }
