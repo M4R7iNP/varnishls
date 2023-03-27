@@ -93,13 +93,13 @@ module.exports = grammar({
       ),
     else_stmt: ($) => seq('else', '{', repeat($.stmt), '}'),
     call_stmt: ($) => seq('call', field('ident', $.ident), ';'), // subroutine call expr (e.g. «call strip_query_params;»)
-    idnt_call_expr: ($) =>
+    ident_call_expr: ($) =>
       prec(
         'call',
         seq(
           field('ident', $.nested_ident),
           '(',
-          repeat(seq($.expr, repeat(seq(',', $.expr)))),
+          optional(commaSep($.expr)),
           ')'
         )
       ), // function call expr (e.g. «if (querystring.get("")) {}»)
@@ -170,7 +170,11 @@ module.exports = grammar({
     varnish_internal_return_methods: ($) =>
       seq(
         choice('hit', 'pass', 'retry', 'restart', 'fail', 'synth', 'hash'),
-        optional(seq('(', repeat(seq($.expr, repeat(seq(',', $.expr)))), ')'))
+        optional(seq('(', optional(commaSep($.expr)), ')'))
       ),
   },
 });
+
+function commaSep(rule) {
+  return seq(rule, repeat(seq(',', rule)));
+}
