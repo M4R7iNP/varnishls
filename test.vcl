@@ -4,9 +4,17 @@ import accept;
 import std;
 import var;
 
+probe localhost_probe {
+    .url = "/_health";
+    .interval = 5s;
+    .timeout = 3.14s;
+    .threshold = 3;
+}
+
 backend localhost {
     .host = "localhost";
     .port = "8080";
+    .probe = localhost_probe;
 }
 
 sub vcl_init {
@@ -33,7 +41,7 @@ acl acl_purge {
 }
 
 sub vcl_recv {
-    if ((req.restarts == 0)) {
+    if (req.restarts == 0) {
         // httpoxy
         unset req.http.proxy;
     }

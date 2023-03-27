@@ -1,4 +1,7 @@
-use crate::parser::parser;
+use crate::{
+    parser::parser,
+    varnish_builtins::{self, Type},
+};
 
 use tower_lsp::lsp_types::*;
 
@@ -41,7 +44,6 @@ pub fn get_node_text(rope: &Rope, node: &Node) -> String {
 
     let node = cursor.node();
     if node.kind() == "ident" {
-        println!("{}", node.kind());
         let start = node.start_byte();
         let end = node.end_byte();
         // let length = end - start;
@@ -102,18 +104,25 @@ impl Document {
 
         let node = node.unwrap();
         let name = get_node_text(&self.rope, &node);
-        println!("hei {:?}: {} og {}", node, name, node.kind());
 
         let q = Query::new(
             ast.language(),
-            &format!("(_ (ident) @ident (#eq? @ident \"{}\"))", name),
+            &format!(
+                r#"
+                [
+                    (toplev_declaration (_ (ident) @ident (#eq? @ident \"{}\")))
+                    (new_stmt (ident) @ident (#eq? @ident \"{}\"))
+                ] @node
+                "#,
+                name, name
+            ),
         )
         .unwrap();
         let mut qc = QueryCursor::new();
         let str = self.rope.to_string();
         let str_bytes = str.as_bytes();
         let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
-        let capt_idx = q.capture_index_for_name("ident").unwrap();
+        let capt_idx = q.capture_index_for_name("node").unwrap();
 
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
@@ -130,16 +139,190 @@ impl Document {
             }
         }
 
-        // TODO: return None?
-        return Some((node.start_position(), node.end_position()));
+        return None;
     }
 
-    /*
-    pub fn get_vmod_imports(&self) {
+    pub fn get_error_ranges(&self) -> Option<Vec<(Point, Point)>> {
         let ast = self.ast.clone();
-        let mut cursor = ast.root_node();
+        let error_ranges = get_error_ranges(&ast);
+
+        /*
+        let q = Query::new(ast.language(), "(ERROR) @error").unwrap();
+        let mut qc = QueryCursor::new();
+        let capt_idx = q.capture_index_for_name("error").unwrap();
+        let str = self.rope.to_string();
+        let str_bytes = str.as_bytes();
+        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+
+
+        for each_match in all_matches {
+            for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
+                let range = capture.node.range();
+                error_ranges.push((range.start_point, range.end_point))
+            }
+        }
+        */
+
+        return Some(error_ranges);
     }
-    */
+
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        return self
+            .get_error_ranges()
+            .unwrap()
+            .iter()
+            .map(|(start, end)| Diagnostic {
+                range: Range::new(
+                    Position {
+                        line: start.row as u32,
+                        character: start.column as u32,
+                    },
+                    Position {
+                        line: end.row as u32,
+                        character: end.column as u32,
+                    },
+                ),
+                severity: Some(DiagnosticSeverity::ERROR),
+                message: "Syntax error".into(),
+                ..Diagnostic::default()
+            })
+            .collect();
+    }
+
+    pub fn get_vmod_imports(&self) -> Vec<String> {
+        let ast = self.ast.clone();
+        let q = Query::new(ast.language(), "(import_declaration (ident) @ident)").unwrap();
+        let mut qc = QueryCursor::new();
+        let str = self.rope.to_string();
+        let str_bytes = str.as_bytes();
+        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let capt_idx = q.capture_index_for_name("ident").unwrap();
+
+        let mut import_names: Vec<String> = Vec::new();
+        for each_match in all_matches {
+            for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
+                let range = capture.node.range();
+                let text = &str[range.start_byte..range.end_byte];
+                import_names.push(text.to_string());
+            }
+        }
+
+        import_names
+    }
+
+    pub fn get_subroutines(&self) -> Vec<String> {
+        let ast = self.ast.clone();
+        let q = Query::new(ast.language(), "(sub_declaration (ident) @ident)").unwrap();
+        let mut qc = QueryCursor::new();
+        let str = self.rope.to_string();
+        let str_bytes = str.as_bytes();
+        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let capt_idx = q.capture_index_for_name("ident").unwrap();
+
+        let mut import_names: Vec<String> = Vec::new();
+        for each_match in all_matches {
+            for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
+                let range = capture.node.range();
+                let text = &str[range.start_byte..range.end_byte];
+                import_names.push(text.to_string());
+            }
+        }
+
+        import_names
+    }
+
+    /**
+     * Expand identifiers into req, res etc. and their properties.
+     */
+    pub fn autocomplete_for_pos(&self, pos: Position) -> Option<Vec<CompletionItem>> {
+        let ast = self.ast.clone();
+        let target_point = Point {
+            row: pos.line as usize,
+            column: pos.character as usize,
+        };
+
+        let mut node: Option<Node> = None;
+        let mut cursor = ast.walk();
+        loop {
+            let idx_opt = cursor.goto_first_child_for_point(target_point);
+            if idx_opt.is_none() {
+                break;
+            }
+            let search_node = cursor.node();
+            match search_node.kind() {
+                "nested_ident" | "ident" => {
+                    node = Some(search_node);
+                    break;
+                }
+                _ => {}
+            }
+            node = Some(search_node);
+        }
+
+        if node.is_none() {
+            return None;
+        }
+
+        let node = node.unwrap();
+        let text = &self.rope.to_string()[node.start_byte()..node.end_byte()];
+
+        if node.parent()?.kind() == "call_stmt" {
+            return Some(
+                self.get_subroutines()
+                    .iter()
+                    .map(|sub_name| CompletionItem {
+                        label: sub_name.clone(),
+                        detail: Some(sub_name.clone()),
+                        kind: Some(CompletionItemKind::FUNCTION),
+                        ..Default::default()
+                    })
+                    .collect(),
+            );
+        } else if node.kind() == "ident" || node.kind() == "nested_ident" {
+            let parts: Vec<&str> = text.split('.').collect(); // split by dot
+            let global = varnish_builtins::get_varnish_builtins();
+            let mut scope = Some(&global);
+            for part in parts.as_slice()[0..parts.len() - 1].iter() {
+                let scope_unwrapped = scope.unwrap();
+                let new_scope: Option<&Type> = match scope_unwrapped {
+                    Type::Obj(obj) => obj.properties.get(*part),
+                    _ => None,
+                };
+                if new_scope.is_some() {
+                    scope = match new_scope.unwrap() {
+                        Type::Obj(_obj) => new_scope,
+                        _ => None,
+                    };
+                }
+
+                if scope.is_none() {
+                    break;
+                }
+            }
+
+            if scope.is_some() {
+                let last_part = parts[parts.len() - 1];
+                return match scope.unwrap() {
+                    Type::Obj(obj) => Some(
+                        obj.properties
+                            .keys()
+                            .filter(|alt| alt.starts_with(&last_part))
+                            .map(|str| str.to_string())
+                            .map(|property| CompletionItem {
+                                label: property.clone(),
+                                detail: Some(property.clone()),
+                                kind: Some(CompletionItemKind::PROPERTY),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    ),
+                    _ => return None,
+                };
+            }
+        }
+
+        return None;
+    }
 }
 
 fn edit_range(doc: &Document, version: i32, range: Range, text: String) -> Document {
@@ -214,5 +397,109 @@ fn get_chunk(rope: &Rope, offset: usize) -> &str {
         &node[idx..]
     } else {
         ""
+    }
+}
+
+pub fn get_error_ranges(tree: &Tree) -> Vec<(Point, Point)> {
+    let mut cursor = tree.walk();
+    let mut error_ranges = Vec::new();
+    let mut recurse = true;
+
+    loop {
+        if (recurse && cursor.goto_first_child()) || cursor.goto_next_sibling() {
+            recurse = true;
+        } else if cursor.goto_parent() {
+            recurse = false;
+        } else {
+            break;
+        }
+
+        let node = cursor.node();
+        if node.is_error() || node.is_missing() {
+            error_ranges.push((node.start_position(), node.end_position()));
+            recurse = false;
+        }
+    }
+
+    error_ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autocomplete_expands_h_to_http() {
+        let doc = Document::new(
+            r#"
+sub vcl_recv {
+    set req.h
+}
+"#
+            .to_string(),
+        );
+        let result = doc
+            .autocomplete_for_pos(Position {
+                line: 2,
+                character: 12,
+            })
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].label, "http");
+    }
+
+    #[test]
+    fn autocomplete_lists_all_on_req() {
+        let doc = Document::new(
+            r#"
+sub vcl_recv {
+    set req.
+}
+"#
+            .to_string(),
+        );
+        let result = doc
+            .autocomplete_for_pos(Position {
+                line: 2,
+                character: 11,
+            })
+            .unwrap();
+        assert!(result.len() > 0);
+    }
+
+    #[test]
+    fn get_all_vmod_imports() {
+        let doc = Document::new(
+            r#"
+import brotli;
+import jwt;
+import xkey;
+"#
+            .to_string(),
+        );
+        let result = doc.get_vmod_imports();
+        println!("imports: {:?}", result);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "brotli");
+        assert_eq!(result[1], "jwt");
+        assert_eq!(result[2], "xkey");
+    }
+
+    #[test]
+    fn get_all_subroutines() {
+        let doc = Document::new(
+            r#"
+sub vcl_init {}
+sub vcl_recv {}
+sub my_custom_sub {}
+"#
+            .to_string(),
+        );
+        let result = doc.get_subroutines();
+        println!("subroutines: {:?}", result);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "vcl_init");
+        assert_eq!(result[1], "vcl_recv");
+        assert_eq!(result[2], "my_custom_sub");
     }
 }

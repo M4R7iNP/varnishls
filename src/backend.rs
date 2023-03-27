@@ -1,13 +1,11 @@
-use std::collections::HashMap;
 use dashmap::DashMap;
-use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tree_sitter::{Node, Point};
+use tree_sitter::Point;
 
 use crate::parser;
 use crate::document::Document;
@@ -17,6 +15,10 @@ pub struct Backend {
     // ast_map: DashMap<String, HashMap<String, Node>>,
     pub document_map: DashMap<String, Document>,
     // semantic_token_map: DashMap<String, Vec<ImCompleteSemanticToken>>,
+}
+
+enum BackendEvent {
+  SendDiagnostics(Url),
 }
 
 unsafe impl Send for Backend {}
@@ -35,7 +37,7 @@ impl LanguageServer for Backend {
                 )),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
-                    trigger_characters: Some(vec![".".to_string()]),
+                    trigger_characters: Some(vec![".".to_string(), " ".to_string()]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
                     completion_item: None,
@@ -74,7 +76,10 @@ impl LanguageServer for Backend {
   async fn did_open(&self, params: DidOpenTextDocumentParams) {
     let uri = params.text_document.uri.to_string();
         let document = Document::new(params.text_document.text);
-        self.document_map.insert(uri, document);
+        self.document_map.insert(uri.clone(), document);
+
+        let doc = self.document_map.get(&uri.clone()).unwrap();
+        self.client.publish_diagnostics(params.text_document.uri, doc.diagnostics(), Some(doc.version())).await;
   }
 
   async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -86,6 +91,9 @@ impl LanguageServer for Backend {
       .map(|change| (change.range, change.text));
 
       self.document_map.alter(&uri, |_, doc| doc.edit(version, changes));
+
+        let doc = self.document_map.get(&uri.clone()).unwrap();
+        self.client.publish_diagnostics(params.text_document.uri, doc.diagnostics(), Some(doc.version())).await;
   }
 
 
@@ -333,56 +341,16 @@ impl LanguageServer for Backend {
     }
     */
 
-    /*
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let completions = || -> Option<Vec<CompletionItem>> {
-            let rope = self.document_map.get(&uri.to_string())?;
-            let ast = self.ast_map.get(&uri.to_string())?;
-            let char = rope.try_line_to_char(position.line as usize).ok()?;
-            let offset = char + position.character as usize;
-            let completions = completion(&ast, offset);
-            let mut ret = Vec::with_capacity(completions.len());
-            for (_, item) in completions {
-                match item {
-                    nrs_language_server::completion::ImCompleteCompletionItem::Variable(var) => {
-                        ret.push(CompletionItem {
-                            label: var.clone(),
-                            insert_text: Some(var.clone()),
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            detail: Some(var),
-                            ..Default::default()
-                        });
-                    }
-                    nrs_language_server::completion::ImCompleteCompletionItem::Function(
-                        name,
-                        args,
-                    ) => {
-                        ret.push(CompletionItem {
-                            label: name.clone(),
-                            kind: Some(CompletionItemKind::FUNCTION),
-                            detail: Some(name.clone()),
-                            insert_text: Some(format!(
-                                "{}({})",
-                                name,
-                                args.iter()
-                                    .enumerate()
-                                    .map(|(index, item)| { format!("${{{}:{}}}", index + 1, item) })
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            )),
-                            insert_text_format: Some(InsertTextFormat::SNIPPET),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-            Some(ret)
+            let doc = self.document_map.get(&uri.to_string())?;
+
+            return doc.autocomplete_for_pos(position);
         }();
         Ok(completions.map(CompletionResponse::Array))
     }
-    */
 
     /*
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
@@ -469,9 +437,3 @@ struct TextDocumentItem {
     version: i32,
 }
 
-fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
-    let line = rope.try_char_to_line(offset).ok()?;
-    let first_char_of_line = rope.try_line_to_char(line).ok()?;
-    let column = offset - first_char_of_line;
-    Some(Position::new(line as u32, column as u32))
-}
