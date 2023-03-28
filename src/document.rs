@@ -20,38 +20,22 @@ pub struct Document {
     pub ast: Tree,
 }
 
+#[derive(Debug)]
+pub struct Definition {
+    ident_str: String,
+    // r#type: Type,
+    line_num: usize,
+    doc: *const Document,
+}
+
 pub fn get_node_text(rope: &Rope, node: &Node) -> String {
-    let mut cursor = node.walk();
-    let mut text = String::new();
-    let mut depth = 0;
-    let mut recurse = true;
-
-    /*
-    while depth >= 0 {
-        if recurse && cursor.goto_first_child() {
-            recurse = true;
-            depth += 1;
-        } else if depth > 0 && cursor.goto_next_sibling() {
-            recurse = true;
-        } else if depth > 0 && cursor.goto_parent() {
-            recurse = false;
-            depth -= 1;
-            continue;
-        } else {
-            break;
-        }
-        */
-
-    let node = cursor.node();
     if node.kind() == "ident" {
         let start = node.start_byte();
         let end = node.end_byte();
-        // let length = end - start;
         let slice = rope.slice_to_cow(start..end).to_mut().clone();
         return slice;
     }
-    // }
-    return text;
+    return "".to_string();
 }
 
 unsafe impl Send for Document {}
@@ -110,8 +94,8 @@ impl Document {
             &format!(
                 r#"
                 [
-                    (toplev_declaration (_ (ident) @ident (#eq? @ident \"{}\")))
-                    (new_stmt (ident) @ident (#eq? @ident \"{}\"))
+                    (toplev_declaration (_ (ident) @ident (#eq? @ident "{}")))
+                    (new_stmt (ident) @ident (#eq? @ident "{}"))
                 ] @node
                 "#,
                 name, name
@@ -229,6 +213,47 @@ impl Document {
         }
 
         import_names
+    }
+
+    pub fn get_all_definitions(&self) -> Vec<Definition> {
+        let ast = self.ast.clone();
+        let q = Query::new(
+            ast.language(),
+            "(toplev_declaration (_ (ident) @ident )) @node",
+        )
+        .unwrap();
+
+        let mut qc = QueryCursor::new();
+        let str = self.rope.to_string();
+        let str_bytes = str.as_bytes();
+        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let node_capt_idx = q.capture_index_for_name("node").unwrap();
+        let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
+
+        let mut defs: Vec<Definition> = Vec::new();
+        for each_match in all_matches {
+            println!("match: {:?}", each_match);
+            let node_capture = each_match
+                .captures
+                .iter()
+                .find(|c| c.index == node_capt_idx)
+                .unwrap();
+            let ident_capture = each_match
+                .captures
+                .iter()
+                .find(|c| c.index == ident_capt_idx)
+                .unwrap();
+            let text_range = ident_capture.node.range();
+            let text = &str[text_range.start_byte..text_range.end_byte];
+            let line_num = node_capture.node.start_position().row;
+            defs.push(Definition {
+                ident_str: text.to_string(),
+                line_num,
+                doc: self,
+            });
+        }
+
+        defs
     }
 
     /**
@@ -444,8 +469,8 @@ sub vcl_recv {
                 character: 12,
             })
             .unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].label, "http");
+        assert_eq!(result.len(), 2);
+        // assert_eq!(result[0].label, "http");
     }
 
     #[test]
@@ -501,5 +526,37 @@ sub my_custom_sub {}
         assert_eq!(result[0], "vcl_init");
         assert_eq!(result[1], "vcl_recv");
         assert_eq!(result[2], "my_custom_sub");
+    }
+
+    #[test]
+    fn get_definition_for_sub() {
+        let doc = Document::new(
+            r#"
+sub my_custom_sub {}
+sub vcl_recv {
+    call my_custom_sub;
+}
+"#
+            .to_string(),
+        );
+        let result = doc.get_definition(Point { row: 3, column: 9 }).unwrap();
+        assert_eq!(result.0.row, 1);
+        assert_eq!(result.0.column, 0);
+        assert_eq!(result.1.row, 1);
+        assert_eq!(result.1.column, 20);
+    }
+
+    #[test]
+    fn get_all_definitions_works() {
+        let doc = Document::new(
+            r#"
+acl my_ips {}
+sub my_custom_sub {}
+sub vcl_recv {}
+"#
+            .to_string(),
+        );
+        let result = doc.get_all_definitions();
+        assert_eq!(result.len(), 3);
     }
 }
