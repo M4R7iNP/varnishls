@@ -86,11 +86,12 @@ module.exports = grammar({
         '{',
         field('consequence', repeat($.stmt)),
         '}',
-        optional(choice($.elsif_stmt, $.else_stmt)),
+        repeat($.elsif_stmt),
+        optional($.else_stmt),
       ),
     elsif_stmt: $ =>
       seq(
-        choice('else if', 'elsif'),
+        choice('else if', 'elsif', 'elseif'),
         $.parenthesized_expression,
         '{',
         repeat($.stmt),
@@ -165,7 +166,8 @@ module.exports = grammar({
       ),
 
     literal: $ => choice($.string, $.number, $.duration, $.bytes),
-    string: () => seq('"', /[^"]*/, '"'),
+    string: () =>
+      choice(seq('"', /[^"]*/, '"'), seq('{"', /[^"]*"+([^}"][^"]*"+)*/, '}')),
     number: () => /\d+/,
     float: () => /\d+\.\d+/,
     // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_utils.c#L300
