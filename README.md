@@ -1,7 +1,7 @@
 ```
 npm i
 npx tree-sitter generate
-cargo run --bin lsp
+cargo build --bin lsp
 ```
 
 Vim lsp setup:

@@ -1,7 +1,5 @@
-use tree_sitter::Point;
-use vcl_parser::parser;
-use vcl_parser::document::Document;
 use std::fs;
+use varnish_lsp::document::Document;
 
 pub fn main() {
     let src = fs::read_to_string("/home/martin/vcl-parser/test.vcl").expect("Could not read VCL");

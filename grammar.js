@@ -77,7 +77,8 @@ module.exports = grammar({
     vcl_version_declaration: $ => seq('vcl', $.float, ';'),
     include_declaration: $ => seq('include', $.string, ';'),
 
-    backend_property: $ => seq('.', $.ident, '=', $.expr, ';'),
+    backend_property: $ =>
+      seq('.', field('left', $.ident), '=', field('right', $.expr), ';'),
     acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
 
     stmt: $ =>
@@ -135,8 +136,8 @@ module.exports = grammar({
       seq(
         'set',
         field('left', $.nested_ident),
-        '=',
-        field('right', $.expr),
+        field('operator', '='),
+        optional(field('right', $.expr)),
         ';',
       ),
     unset_stmt: $ => seq('unset', $.nested_ident, ';'),

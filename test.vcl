@@ -1,6 +1,8 @@
 vcl 4.0;
 
 import accept;
+import directors;
+import jwt;
 import std;
 import var;
 
@@ -17,8 +19,16 @@ backend localhost {
     .probe = localhost_probe;
 }
 
+backend localhost_8081 {
+    .host = "localhost";
+    .port = "8081";
+    .probe = localhost_probe;
+}
+
 sub vcl_init {
     var.global_set("hello", "world");
+
+    new vdir = directors.round_robin();
 
     new jwt_reader = jwt.reader();
 
@@ -56,11 +66,24 @@ sub vcl_recv {
 
     if (req.url == "/_health") {
         return(synth(200, "ok"));
-    }
-
-    if (req.url ~ "^/api") {
+    } elsif (req.url ~ "^/api") {
         set req.backend_hint = localhost;
         call add_cors_header;
         return(pass);
+    } elsif (req.url ~ "^/martin") {
+        synthetic({"
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>Martin var her</title>
+            </head>
+            <body>
+                Martin er best, ingen protest.
+            </body>
+            </html>
+        "});
+    } else {
+        set req.http.x-test = "test";
     }
 }

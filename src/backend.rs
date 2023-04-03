@@ -1,24 +1,129 @@
-use dashmap::DashMap;
+use async_std::sync::{Arc, RwLock};
+// use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tower_lsp::jsonrpc::Result;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+// use std::result::Result as StdResult;
+use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
-use crate::parser;
 use crate::document::Document;
+use crate::varnish_builtins::{get_varnish_builtins, Type};
+use crate::vmod::read_vmod_lib_by_name;
 
 pub struct Backend {
     pub client: Client,
     // ast_map: DashMap<String, HashMap<String, Node>>,
-    pub document_map: DashMap<String, Document>,
+    // pub document_map: DashMap<String, Document>,
+    pub document_map: Arc<RwLock<HashMap<String, Document>>>,
+    // pub root_path: Option<String>,
+    pub root_uri: Arc<RwLock<Option<Url>>>,
     // semantic_token_map: DashMap<String, Vec<ImCompleteSemanticToken>>,
 }
 
-enum BackendEvent {
-  SendDiagnostics(Url),
+impl Backend {
+    pub fn new(client: Client) -> Backend {
+        Backend {
+            client,
+            document_map: Default::default(),
+            root_uri: Default::default(),
+        }
+    }
+
+    async fn get_all_definitions_across_all_documents(&self) -> Type {
+        let mut scope = get_varnish_builtins();
+        let doc_map = self.document_map.read().await;
+        if let Type::Obj(ref mut obj) = scope {
+            for (_key, doc) in doc_map.iter() {
+                for vmod_name in doc.get_vmod_imports() {
+                    let vmod = read_vmod_lib_by_name(vmod_name.clone()).await;
+                    if let Ok(vmod) = vmod {
+                        let vmod_obj = vmod.scope;
+                        obj.properties.insert(vmod_name, vmod_obj);
+                    }
+                }
+            }
+
+            for (_key, doc) in doc_map.iter() {
+                for def in doc.get_all_definitions() {
+                    obj.properties
+                        .insert(def.ident_str.to_string(), *def.r#type);
+                }
+            }
+        }
+
+        let mut temp_map = BTreeMap::new();
+
+        for (_key, doc) in doc_map.iter() {
+            for def in doc.get_new_objs(&scope) {
+                temp_map.insert(def.ident_str.to_string(), *def.r#type);
+            }
+        }
+        if let Type::Obj(ref mut obj) = scope {
+            obj.properties.append(&mut temp_map);
+        }
+
+        return scope;
+    }
+
+    async fn set_root_uri(&self, uri: Url) {
+        let mut w = self.root_uri.write().await;
+        *w = Some(uri);
+    }
+
+    async fn read_includes(
+        &self,
+        doc_uri: String,
+        includes: Vec<String>,
+    ) -> HashMap<String, Document> {
+        let mut new_docs = HashMap::new();
+        let mut includes_to_process = VecDeque::from(includes.clone());
+
+        self.client
+            .log_message(MessageType::INFO, format!("includes: {:?}", includes))
+            .await;
+
+        let uri = Url::parse(&doc_uri).unwrap();
+        let doc_path = uri.to_file_path().unwrap().parent().unwrap().to_owned();
+        loop {
+            let include = match includes_to_process.pop_front() {
+                Some(val) => val,
+                None => break,
+            };
+
+            let include_path_str = doc_path.join(include).to_string_lossy().to_string();
+            if new_docs.contains_key(&include_path_str) {
+                continue;
+            }
+
+            let file = tokio::fs::read_to_string(&include_path_str).await;
+            if let Err(err) = file {
+                self.client
+                    .publish_diagnostics(
+                        uri.clone(),
+                        vec![Diagnostic {
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            message: format!("Failed to read file {} ({})", include_path_str, err),
+                            ..Default::default()
+                        }],
+                        None,
+                    )
+                    .await;
+                continue;
+            }
+
+            let file = file.unwrap();
+            let mut included_doc = Document::new(file);
+            included_doc.url = Some(include_path_str.clone());
+            includes_to_process.append(&mut included_doc.get_includes().into());
+            new_docs.insert(include_path_str.clone(), included_doc);
+        }
+
+        return new_docs;
+    }
 }
 
 unsafe impl Send for Backend {}
@@ -26,25 +131,35 @@ unsafe impl Sync for Backend {}
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
+        self.set_root_uri(init_params.root_uri.clone().unwrap())
+            .await;
+
+        /*
+        self.client
+            .log_message(MessageType::INFO, format!("initializing: {:?}", init_params))
+            .await;
+        */
+
         Ok(InitializeResult {
-            server_info: None,
+            server_info: Some(ServerInfo {
+                name: "varnish_lsp".to_string(),
+                version: None,
+            }),
             offset_encoding: None,
             capabilities: ServerCapabilities {
                 inlay_hint_provider: Some(OneOf::Left(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                    TextDocumentSyncKind::INCREMENTAL,
+                    // TextDocumentSyncKind::FULL,
                 )),
+
                 completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(false),
+                    resolve_provider: Some(true),
                     trigger_characters: Some(vec![".".to_string(), " ".to_string()]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
                     completion_item: None,
-                }),
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["dummy.do_something".to_string()],
-                    work_done_progress_options: Default::default(),
                 }),
 
                 workspace: Some(WorkspaceServerCapabilities {
@@ -63,6 +178,7 @@ impl LanguageServer for Backend {
             },
         })
     }
+
     async fn initialized(&self, _: InitializedParams) {
         self.client
             .log_message(MessageType::INFO, "initialized!")
@@ -73,29 +189,52 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-  async fn did_open(&self, params: DidOpenTextDocumentParams) {
-    let uri = params.text_document.uri.to_string();
-        let document = Document::new(params.text_document.text);
-        self.document_map.insert(uri.clone(), document);
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let uri = params.text_document.uri.to_string();
+        let mut document = Document::new(params.text_document.text);
+        document.url = Some(uri.to_string());
+        let mut doc_map = self.document_map.write().await;
+        doc_map.insert(uri.to_string(), document);
 
-        let doc = self.document_map.get(&uri.clone()).unwrap();
-        self.client.publish_diagnostics(params.text_document.uri, doc.diagnostics(), Some(doc.version())).await;
-  }
+        let doc = doc_map.get(&uri.to_string()).unwrap();
+        self.client
+            .publish_diagnostics(
+                params.text_document.uri,
+                doc.diagnostics(),
+                Some(doc.version()),
+            )
+            .await;
 
-  async fn did_change(&self, params: DidChangeTextDocumentParams) {
-    let uri = params.text_document.uri.to_string();
-    let version = params.text_document.version;
-    let changes = params
-      .content_changes
-      .into_iter()
-      .map(|change| (change.range, change.text));
+        let includes = doc.get_includes();
+        // drop(doc_map); // drop reference, unlocks lock
+        let included_docs = self.read_includes(uri, includes).await;
+        for (url_str, included_doc) in included_docs {
+            doc_map.insert(url_str, included_doc);
+        }
+        self.client.log_message(MessageType::INFO, "All included files are imported").await;
+    }
 
-      self.document_map.alter(&uri, |_, doc| doc.edit(version, changes));
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let uri = params.text_document.uri.to_string();
+        let version = params.text_document.version;
+        let changes = params
+            .content_changes
+            .into_iter()
+            .map(|change| (change.range, change.text));
 
-        let doc = self.document_map.get(&uri.clone()).unwrap();
-        self.client.publish_diagnostics(params.text_document.uri, doc.diagnostics(), Some(doc.version())).await;
-  }
+        let mut doc_map = self.document_map.write().await;
+        let doc = doc_map.get_mut(&uri).unwrap();
+        doc.edit(version, changes);
 
+        // let doc = self.document_map.get(&uri.clone()).unwrap();
+        self.client
+            .publish_diagnostics(
+                params.text_document.uri,
+                doc.diagnostics(),
+                Some(doc.version()),
+            )
+            .await;
+    }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
         self.client
@@ -112,40 +251,51 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-
-            let uri = params.text_document_position_params.text_document.uri;
-            let doc = self.document_map.get(&uri.to_string());
-            if doc.is_none() {
-            return Ok(None);
-        }
-            let doc = doc.unwrap();
+        let src_uri = params.text_document_position_params.text_document.uri;
+        let doc_map = self.document_map.read().await;
+        let src_doc = doc_map.get(&src_uri.to_string()).ok_or(Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: "Could not find source document".to_string(),
+            data: None,
+        })?;
         let position = params.text_document_position_params.position;
         let point = Point {
             row: position.line as usize,
             column: position.character as usize,
         };
-        let result = doc.get_definition(point);
-        if result.is_none() {
-            return Ok(None);
-        }
-        let (start, end) = result.unwrap();
 
+        let ident = src_doc.get_ident_at_point(point).ok_or(Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: "Could not find ident".to_string(),
+            data: None,
+        })?;
 
-            // let line_offset = doc.rope.offset_of_line(position.line as usize);
-            // let offset = line_offset + position.character as usize;
-            // self.client.log_message(MessageType::INFO, &format!("{:#?}, {}", ast.value(), offset)).await;
-            self.client
-                .log_message(MessageType::INFO, &format!("{:?}, ", start))
-                .await;
+        for (uri, doc) in doc_map.iter() {
+            let result = doc.get_definition_by_name(ident.clone());
+            if result.is_none() {
+                continue;
+            }
 
+            let (start, end) = result.unwrap();
 
             let range = Range::new(
-                Position { line: start.row as u32, character: start.column as u32 },
-                Position { line: end.row as u32, character: end.column as u32 }
+                Position {
+                    line: start.row as u32,
+                    character: start.column as u32,
+                },
+                Position {
+                    line: end.row as u32,
+                    character: end.column as u32,
+                },
             );
 
+            return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(
+                Url::parse(uri).unwrap(),
+                range,
+            ))));
+        }
 
-        Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, range))))
+        return Ok(None);
     }
 
     /*
@@ -344,10 +494,13 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
+        let scope = self.get_all_definitions_across_all_documents().await;
+        // let scope = get_varnish_builtins();
+        let doc_map = self.document_map.read().await;
         let completions = || -> Option<Vec<CompletionItem>> {
-            let doc = self.document_map.get(&uri.to_string())?;
+            let doc = doc_map.get(&uri.to_string())?;
 
-            return doc.autocomplete_for_pos(position);
+            return doc.autocomplete_for_pos(position, scope);
         }();
         Ok(completions.map(CompletionResponse::Array))
     }
@@ -431,9 +584,3 @@ impl Notification for CustomNotification {
     type Params = InlayHintParams;
     const METHOD: &'static str = "custom/notification";
 }
-struct TextDocumentItem {
-    uri: Url,
-    text: String,
-    version: i32,
-}
-

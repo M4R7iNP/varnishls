@@ -1,5 +1,5 @@
 {
-  "name": "vcl-parser",
+  "name": "tree-sitter-vcl",
   "version": "1.0.0",
   "description": "",
   "main": "bindings/node",
@@ -11,5 +11,16 @@
   "license": "ISC",
   "devDependencies": {
     "tree-sitter-cli": "^0.20.7"
-  }
+  },
+  "dependencies": {
+    "nan": "^2.17.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.vcl",
+      "file-types": [
+        "vcl"
+      ]
+    }
+  ]
 }
