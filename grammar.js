@@ -10,8 +10,9 @@
 module.exports = grammar({
   name: 'vcl',
 
-  extras: $ => [/\s+/, $.COMMENT],
   word: $ => $.ident,
+  extras: $ => [/\s+/, $.COMMENT, $.inline_c],
+  inline: $ => [$.expr, $.inline_c],
 
   precedences: () => [['member', 'call']],
 
@@ -37,24 +38,34 @@ module.exports = grammar({
         $.probe_declaration,
         $.import_declaration,
         $.vcl_version_declaration,
+        $.include_declaration,
       ),
     acl_declaration: $ =>
-      seq('acl', field('ident', $.ident), '{', repeat($.acl_entry), '}'),
+      seq(
+        'acl',
+        field('ident', $.ident),
+        field('body', seq('{', repeat($.acl_entry), '}')),
+      ),
     sub_declaration: $ =>
-      seq('sub', field('ident', $.ident), '{', repeat($.stmt), '}'),
+      seq(
+        'sub',
+        field('ident', $.ident),
+        field('body', seq('{', repeat($.stmt), '}')),
+      ),
     backend_declaration: $ =>
       seq(
         'backend',
         field('ident', $.ident),
-        choice(seq('{', repeat($.backend_property), '}'), seq('none', ';')),
+        choice(
+          field('body', seq('{', repeat($.backend_property), '}')),
+          seq('none', ';'),
+        ),
       ),
     probe_declaration: $ =>
       seq(
         'probe',
         field('ident', $.ident),
-        '{',
-        repeat($.backend_property),
-        '}',
+        field('body', seq('{', repeat($.backend_property), '}')),
       ),
     import_declaration: $ =>
       seq(
@@ -64,6 +75,7 @@ module.exports = grammar({
         ';',
       ),
     vcl_version_declaration: $ => seq('vcl', $.float, ';'),
+    include_declaration: $ => seq('include', $.string, ';'),
 
     backend_property: $ => seq('.', $.ident, '=', $.expr, ';'),
     acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
@@ -77,6 +89,7 @@ module.exports = grammar({
         $.call_stmt,
         $.ident_call_stmt,
         $.ret_stmt,
+        $.include_declaration,
       ),
 
     if_stmt: $ =>
@@ -104,9 +117,28 @@ module.exports = grammar({
     ident_call_stmt: $ => seq($.ident_call_expr, ';'), // function call statement (e.g. «var.global_set("a", "b");» )
 
     ret_stmt: $ =>
-      seq('return', '(', $.varnish_internal_return_methods, ')', ';'),
-    new_stmt: $ => seq('new', field('ident', $.ident), '=', $.expr, ';'),
-    set_stmt: $ => seq('set', $.nested_ident, '=', $.expr, ';'),
+      seq(
+        'return',
+        optional(seq('(', $.varnish_internal_return_methods, ')')),
+        ';',
+      ),
+    // new_stmt: $ => seq('new', field('ident', $.ident), '=', $.expr, ';'),
+    new_stmt: $ =>
+      seq(
+        'new',
+        field('ident', $.ident),
+        '=',
+        field('def_right', $.ident_call_expr),
+        ';',
+      ),
+    set_stmt: $ =>
+      seq(
+        'set',
+        field('left', $.nested_ident),
+        '=',
+        field('right', $.expr),
+        ';',
+      ),
     unset_stmt: $ => seq('unset', $.nested_ident, ';'),
     expr: $ =>
       choice(
@@ -167,9 +199,14 @@ module.exports = grammar({
 
     literal: $ => choice($.string, $.number, $.duration, $.bytes),
     string: () =>
-      choice(seq('"', /[^"]*/, '"'), seq('{"', /[^"]*"+([^}"][^"]*"+)*/, '}')),
-    number: () => /\d+/,
-    float: () => /\d+\.\d+/,
+      token(
+        choice(
+          seq('"', /[^"]*/, '"'),
+          seq('{"', /[^"]*"+([^}"][^"]*"+)*/, '}'),
+        ),
+      ),
+    number: () => /-?\d+/,
+    float: () => /-?\d+\.\d+/,
     // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_utils.c#L300
     duration: $ =>
       seq(
@@ -179,10 +216,12 @@ module.exports = grammar({
     bytes: $ =>
       seq(choice($.number, $.float), choice('B', 'KB', 'MB', 'GB', 'TB')),
 
-    ident: () => /[\w\-]+/,
+    ident: () => /\w[\w-]*/,
+    imm_ident: () => token.immediate(/\w[\w-]*/), // immediate identifier (nested identifiers must not have whitespace)
     enum_ident: () => /[A-Z_]+/,
     // optional due to autocomplete
-    nested_ident: $ => seq($.ident, repeat(seq('.', optional($.ident)))),
+    nested_ident: $ =>
+      seq($.ident, repeat(seq(token.immediate('.'), optional($.imm_ident)))),
     /*
     partial_nested_ident: ($) =>
       seq($.ident, repeat(seq('.', optional($.ident)))),
@@ -219,6 +258,8 @@ module.exports = grammar({
         ),
         ')',
       ),
+
+    inline_c: _$ => seq('C{', /[^}]*?}/, token.immediate('C')),
   },
 });
 
