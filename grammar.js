@@ -240,6 +240,7 @@ module.exports = grammar({
           'hash',
           'deliver',
           'abandon',
+          'lookup',
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
       ),
