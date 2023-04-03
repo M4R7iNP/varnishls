@@ -1,6 +1,6 @@
 use crate::{
     parser::parser,
-    varnish_builtins::{scope_contains_backend, Func, Obj, Type},
+    varnish_builtins::{scope_contains_backend, Func, Obj, Type, BACKEND_FIELDS, PROBE_FIELDS},
 };
 
 use tower_lsp::lsp_types::*;
@@ -24,6 +24,13 @@ pub struct Definition {
     pub r#type: Box<Type>,
     pub line_num: usize,
     pub doc_url: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct LintError {
+    message: String,
+    severity: DiagnosticSeverity,
+    range: Range,
 }
 
 pub fn get_node_text(rope: &Rope, node: &Node) -> String {
@@ -173,26 +180,88 @@ impl Document {
         return self.get_definition_by_name(name);
     }
 
-    pub fn get_error_ranges(&self) -> Option<Vec<(Point, Point)>> {
+    pub fn get_error_ranges(&self) -> Option<Vec<LintError>> {
         let ast = self.ast.clone();
-        let error_ranges = get_error_ranges(&ast);
 
-        /*
-        let q = Query::new(ast.language(), "(ERROR) @error").unwrap();
-        let mut qc = QueryCursor::new();
-        let capt_idx = q.capture_index_for_name("error").unwrap();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let full_text = self.rope.to_string();
+        let mut cursor = ast.walk();
+        let mut error_ranges = Vec::new();
+        let mut recurse = true;
 
+        loop {
+            if (recurse && cursor.goto_first_child()) || cursor.goto_next_sibling() {
+                recurse = true;
+            } else if cursor.goto_parent() {
+                recurse = false;
+            } else {
+                break;
+            }
 
-        for each_match in all_matches {
-            for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
-                let range = capture.node.range();
-                error_ranges.push((range.start_point, range.end_point))
+            let node = cursor.node();
+            let range = Range::new(
+                Position {
+                    line: node.start_position().row as u32,
+                    character: node.start_position().column as u32,
+                },
+                Position {
+                    line: node.end_position().row as u32,
+                    character: node.end_position().column as u32,
+                },
+            );
+
+            if node.is_error() || node.is_missing() {
+                error_ranges.push(LintError {
+                    message: "Syntax error".to_string(),
+                    range,
+                    severity: DiagnosticSeverity::ERROR,
+                });
+                recurse = false;
+                continue;
+            }
+
+            match node.kind() {
+                "backend_property" => {
+                    let left = node.child_by_field_name("left");
+                    match left {
+                        None => {
+                            error_ranges.push(LintError {
+                                message: "Missing backend property field".to_string(),
+                                range,
+                                severity: DiagnosticSeverity::ERROR,
+                            });
+                            continue;
+                        }
+                        Some(left_node) => {
+                            let parent_parent_node_kind = node.parent().unwrap().kind();
+                            let fields = match parent_parent_node_kind {
+                                "probe_declaration" => PROBE_FIELDS,
+                                _ => BACKEND_FIELDS,
+                            };
+
+                            let text = &full_text[left_node.byte_range()];
+                            if !fields.iter().any(|field| field == &text) {
+                                error_ranges.push(LintError {
+                                    message: format!("Backend property «{}» does not exist", text),
+                                    range,
+                                    severity: DiagnosticSeverity::ERROR,
+                                });
+                            }
+                        }
+                    }
+
+                    let right = node.child_by_field_name("right");
+                    if right.is_none() {
+                        error_ranges.push(LintError {
+                            message: "Missing backend property value".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+                }
+                _ => {}
             }
         }
-        */
 
         return Some(error_ranges);
     }
@@ -202,19 +271,10 @@ impl Document {
             .get_error_ranges()
             .unwrap()
             .iter()
-            .map(|(start, end)| Diagnostic {
-                range: Range::new(
-                    Position {
-                        line: start.row as u32,
-                        character: start.column as u32,
-                    },
-                    Position {
-                        line: end.row as u32,
-                        character: end.column as u32,
-                    },
-                ),
-                severity: Some(DiagnosticSeverity::ERROR),
-                message: "Syntax error".into(),
+            .map(|lint_error| Diagnostic {
+                range: lint_error.range,
+                severity: Some(lint_error.severity),
+                message: lint_error.message.to_owned(),
                 ..Diagnostic::default()
             })
             .collect();
@@ -457,6 +517,30 @@ impl Document {
                             text = full_text[node.byte_range()].to_string();
                         }
                     },
+                    "backend_property" => {
+                        match cursor.field_name() {
+                            Some("left") => {
+                                text = full_text[node.byte_range()].to_string();
+                                let parent_parent_node_kind = parent_node.parent().unwrap().kind();
+                                let fields = match parent_parent_node_kind {
+                                    "probe_declaration" => PROBE_FIELDS,
+                                    _ => BACKEND_FIELDS,
+                                };
+                                return Some(
+                                    fields
+                                        .iter()
+                                        .filter(|field| field.starts_with(&text))
+                                        .map(|field| CompletionItem {
+                                            label: field.to_string(),
+                                            detail: Some(field.to_string()),
+                                            ..Default::default()
+                                        })
+                                        .collect(),
+                                );
+                            }
+                            _ => {}
+                        };
+                    }
                     "nested_ident" => {
                         node = node.parent().unwrap();
                         text = full_text[node.byte_range()].to_string();
@@ -469,7 +553,6 @@ impl Document {
             }
             let search_node = cursor.node();
             // let field_name = cursor.field_name();
-
             // println!("walking: {}", search_node.kind());
             // println!("field_name: {:?}", field_name);
             /*
@@ -686,30 +769,6 @@ fn get_chunk(rope: &Rope, offset: usize) -> &str {
     }
 }
 
-pub fn get_error_ranges(tree: &Tree) -> Vec<(Point, Point)> {
-    let mut cursor = tree.walk();
-    let mut error_ranges = Vec::new();
-    let mut recurse = true;
-
-    loop {
-        if (recurse && cursor.goto_first_child()) || cursor.goto_next_sibling() {
-            recurse = true;
-        } else if cursor.goto_parent() {
-            recurse = false;
-        } else {
-            break;
-        }
-
-        let node = cursor.node();
-        if node.is_error() || node.is_missing() || node.kind() == "incomplete_ident" {
-            error_ranges.push((node.start_position(), node.end_position()));
-            recurse = false;
-        }
-    }
-
-    error_ranges
-}
-
 fn lookup_from_scope<'a>(global_scope: &'a Type, idents: Vec<&'a str>) -> Option<&'a Type> {
     let mut scope = global_scope;
     for ident in idents.as_slice().iter() {
@@ -914,7 +973,6 @@ sub vcl_recv {
         assert!(result.len() > 0);
     }
 
-    /*
     #[test]
     fn autocomplete_backend_def_properties() {
         let doc = Document::new(
@@ -924,21 +982,19 @@ backend localhost {
 }
 "#
             .to_string(),
-            get_varnish_builtins()
         );
         let result = doc.autocomplete_for_pos(
             Position {
                 line: 2,
                 character: 6,
             },
-            scope,
+            get_varnish_builtins(),
         );
         println!("result: {:?}", result);
         let result = result.unwrap();
         assert_eq!(result.first().unwrap().detail, Some("port".to_string()));
         assert_eq!(result.len(), 1);
     }
-    */
 
     #[test]
     fn lists_all_includes() {

@@ -85,7 +85,11 @@ module.exports = grammar({
     include_declaration: $ => seq('include', $.string, ';'),
 
     backend_property: $ =>
-      seq('.', field('left', $.ident), '=', field('right', $.expr), ';'),
+      seq(
+        '.',
+        field('left', $.ident),
+        optional(seq('=', optional(seq(field('right', $.expr), ';')))),
+      ),
     // quirk, probe .request can have a list of strings
     probe_request_string_list: $ =>
       seq(
