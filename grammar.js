@@ -198,6 +198,8 @@ module.exports = grammar({
           'fail',
           'synth',
           'hash',
+          'deliver',
+          'abandon'
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
       ),
