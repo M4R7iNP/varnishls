@@ -65,7 +65,14 @@ module.exports = grammar({
       seq(
         'probe',
         field('ident', $.ident),
-        field('body', seq('{', repeat($.backend_property), '}')),
+        field(
+          'body',
+          seq(
+            '{',
+            repeat(choice($.backend_property, $.probe_request_string_list)),
+            '}',
+          ),
+        ),
       ),
     import_declaration: $ =>
       seq(
@@ -79,6 +86,15 @@ module.exports = grammar({
 
     backend_property: $ =>
       seq('.', field('left', $.ident), '=', field('right', $.expr), ';'),
+    // quirk, probe .request can have a list of strings
+    probe_request_string_list: $ =>
+      seq(
+        '.',
+        field('left', 'request'),
+        '=',
+        field('right', repeat1($.string)),
+        ';',
+      ),
     acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
 
     stmt: $ =>
