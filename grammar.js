@@ -191,6 +191,7 @@ module.exports = grammar({
       seq(
         choice(
           'hit',
+          'miss',
           'pass',
           'pipe',
           'retry',
@@ -198,6 +199,8 @@ module.exports = grammar({
           'fail',
           'synth',
           'hash',
+          'deliver',
+          'abandon',
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
       ),
