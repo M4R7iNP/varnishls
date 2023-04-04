@@ -283,26 +283,27 @@ pub async fn read_vmod_lib(vmod_name: String, path: String) -> Result<VmodData, 
         unsafe { std::mem::transmute::<_, *const VmodDataCStruct>(file[offset..].as_ptr()) };
     let vmd = unsafe { &*vmd_ptr };
 
-    let json = CStr::from_bytes_until_nul(&file[(vmd.json as usize)..])?.to_string_lossy();
+    let json = unsafe { CStr::from_ptr((file[(vmd.json as usize)..].as_ptr()) as *const i8) }
+        .to_string_lossy();
 
     let vmod_json_data = parse_vmod_json(&json)?;
     return Ok(VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
-        name: CStr::from_bytes_until_nul(&file[(vmd.name as usize)..])?
+        name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const i8) }
             .to_string_lossy()
             .to_string(),
-        file_id: CStr::from_bytes_until_nul(&file[(vmd.file_id as usize)..])?
+        file_id: unsafe { CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const i8) }
             .to_string_lossy()
             .to_string(),
-        func: CStr::from_bytes_until_nul(&file[(vmd.func as usize)..])?
+        func: unsafe { CStr::from_ptr((file[(vmd.func as usize)..].as_ptr()) as *const i8) }
             .to_string_lossy()
             .to_string(),
         func_len: vmd.func_len as usize,
-        proto: CStr::from_bytes_until_nul(&file[(vmd.proto as usize)..])?
+        proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const i8) }
             .to_string_lossy()
             .to_string(),
-        abi: CStr::from_bytes_until_nul(&file[(vmd.abi as usize)..])?
+        abi: unsafe { CStr::from_ptr((file[(vmd.abi as usize)..].as_ptr()) as *const i8) }
             .to_string_lossy()
             .to_string(),
         json: json.to_string(),
