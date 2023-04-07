@@ -1,11 +1,14 @@
 use crate::{
     parser::parser,
-    varnish_builtins::{scope_contains_backend, Func, Obj, Type, BACKEND_FIELDS, PROBE_FIELDS},
+    varnish_builtins::{scope_contains, Func, Obj, Type, BACKEND_FIELDS, PROBE_FIELDS},
 };
 
+use log::debug;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 use tower_lsp::lsp_types::*;
-
-use std::sync::{Arc, Mutex};
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, Tree};
 use xi_rope::{rope::Utf16CodeUnitsMetric, Interval, Rope};
 
@@ -15,7 +18,7 @@ pub struct Document {
     parser: Arc<Mutex<Parser>>,
     pub rope: Rope,
     pub ast: Tree,
-    pub url: Option<String>,
+    pub url: Option<Url>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,14 +36,22 @@ pub struct LintError {
     range: Range,
 }
 
+// reserved keywords, without top-level only declarations
+const RESERVED_KEYWORDS: &'static [&str] = &[
+    "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
+];
+
 pub fn get_node_text(rope: &Rope, node: &Node) -> String {
-    if node.kind() == "ident" {
-        let start = node.start_byte();
-        let end = node.end_byte();
-        let slice = rope.slice_to_cow(start..end).to_mut().clone();
-        return slice;
+    let mut str = &rope.to_string()[node.byte_range()];
+    if let Some((first_part, _)) = str.split_once('\n') {
+        str = first_part;
     }
-    return "".to_string();
+
+    if RESERVED_KEYWORDS.contains(&str) {
+        return "".to_string();
+    }
+
+    return str.to_string();
 }
 
 unsafe impl Send for Document {}
@@ -118,39 +129,32 @@ impl Document {
     }
 
     pub fn get_ident_at_point(&self, point: Point) -> Option<String> {
-        let mut node: Option<Node> = None;
-        let mut cursor = self.ast.walk();
-        loop {
-            let idx_opt = cursor.goto_first_child_for_point(point);
-            if idx_opt.is_none() {
-                break;
-            }
-            node = Some(cursor.node());
-        }
-
-        if node.is_none() {
-            return None;
-        }
-
-        let node = node.unwrap();
+        let node = self
+            .ast
+            .root_node()
+            .descendant_for_point_range(point, point)?;
         let name = get_node_text(&self.rope, &node);
         return Some(name);
     }
 
-    pub fn get_definition_by_name(&self, name: String) -> Option<(Point, Point)> {
+    pub fn get_definition_by_name(&self, name: &String) -> Option<(Point, Point)> {
         let q = Query::new(
             self.ast.language(),
             &format!(
                 r#"
                 [
-                    (toplev_declaration (_ (ident) @ident (#eq? @ident "{}")))
-                    (new_stmt (ident) @ident (#eq? @ident "{}"))
+                    (toplev_declaration (_ ident: (ident) @ident (#eq? @ident "{}")))
+                    (new_stmt (ident) @left (#eq? @left "{}"))
                 ] @node
                 "#,
                 name, name
             ),
-        )
-        .unwrap();
+        );
+        if let Err(err) = q {
+            debug!("Error: {}", err);
+            return None;
+        }
+        let q = q.unwrap();
         let mut qc = QueryCursor::new();
         let str = self.rope.to_string();
         let str_bytes = str.as_bytes();
@@ -159,14 +163,14 @@ impl Document {
 
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
-                // TODO: check if parent node is a declaration
                 let range = capture.node.range();
-                let text = &str[range.start_byte..range.end_byte];
                 let line = range.start_point.row;
                 let col = range.start_point.column;
-                println!(
+                debug!(
                     "[Line: {:?}, Col: {:?}] Matching source code: `{:?}`",
-                    line, col, text
+                    line,
+                    col,
+                    &str[range.start_byte..range.end_byte]
                 );
                 return Some((range.start_point, range.end_point));
             }
@@ -177,10 +181,10 @@ impl Document {
 
     pub fn get_definition_by_point(&self, point: Point) -> Option<(Point, Point)> {
         let name = self.get_ident_at_point(point)?;
-        return self.get_definition_by_name(name);
+        return self.get_definition_by_name(&name);
     }
 
-    pub fn get_error_ranges(&self) -> Option<Vec<LintError>> {
+    pub fn get_error_ranges(&self) -> Vec<LintError> {
         let ast = self.ast.clone();
 
         let full_text = self.rope.to_string();
@@ -209,7 +213,7 @@ impl Document {
                 },
             );
 
-            if node.is_error() || node.is_missing() {
+            if node.is_error() {
                 error_ranges.push(LintError {
                     message: "Syntax error".to_string(),
                     range,
@@ -219,7 +223,59 @@ impl Document {
                 continue;
             }
 
+            if node.is_missing() {
+                error_ranges.push(LintError {
+                    message: format!("Expected {}", node.kind()),
+                    range,
+                    severity: DiagnosticSeverity::ERROR,
+                });
+                recurse = false;
+                continue;
+            }
+
             match node.kind() {
+                "set_stmt" => {
+                    let left = node.child_by_field_name("left");
+                    if left.is_none() {
+                        error_ranges.push(LintError {
+                            message: "Missing set property".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+
+                    let right = node.child_by_field_name("right");
+                    if right.is_none() {
+                        error_ranges.push(LintError {
+                            message: "Missing set value".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+                }
+                "new_stmt" => {
+                    let left = node.child_by_field_name("ident");
+                    if left.is_none() {
+                        error_ranges.push(LintError {
+                            message: "Missing identifier".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+
+                    let right = node.child_by_field_name("def_right");
+                    if right.is_none() {
+                        error_ranges.push(LintError {
+                            message: "Missing value".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+                }
                 "backend_property" => {
                     let left = node.child_by_field_name("left");
                     match left {
@@ -259,17 +315,99 @@ impl Document {
                         continue;
                     }
                 }
+                "nested_ident" | "ident" => {
+                    let text = &self.rope.to_string()[node.byte_range()];
+                    if RESERVED_KEYWORDS.contains(&text) {
+                        error_ranges.push(LintError {
+                            message: "Reserved keyword".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                        continue;
+                    }
+                    if text.ends_with('.') {
+                        error_ranges.push(LintError {
+                            message: "Identifier ending with dot?".to_string(),
+                            range,
+                            severity: DiagnosticSeverity::WARNING,
+                        });
+                        continue;
+                    }
+
+                    let toplev_decl = {
+                        let mut node = node;
+                        loop {
+                            match node.parent() {
+                                Some(parent_node) if parent_node.kind() == "toplev_declaration" => {
+                                    break;
+                                }
+                                Some(parent_node) => {
+                                    node = parent_node;
+                                }
+                                None => break,
+                            }
+                        }
+                        node
+                    };
+
+                    if toplev_decl.kind() == "sub_declaration" {
+                        if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
+                            let sub_name = get_node_text(&self.rope, &ident_node);
+                            let parts = text.split('.').collect::<Vec<&str>>();
+                            if sub_name.starts_with("vcl_") {
+                                let exists_in_sub = match parts[0] {
+                                    "req" => match sub_name.as_str() {
+                                        "vcl_recv" | "vcl_deliver" | "vcl_synth" | "vcl_miss"
+                                        | "vcl_hit" | "vcl_pass" | "vcl_purge" | "vcl_pipe"
+                                        | "vcl_hash" => true,
+                                        _ => false,
+                                    },
+                                    "bereq" => match sub_name.as_str() {
+                                        "vcl_backend_fetch"
+                                        | "vcl_backend_response"
+                                        | "vcl_pipe"
+                                        | "vcl_backend_error" => true,
+                                        _ => false,
+                                    },
+                                    "beresp" => match sub_name.as_str() {
+                                        "vcl_backend_response" | "vcl_backend_error" => true,
+                                        _ => false,
+                                    },
+                                    "resp" => match sub_name.as_str() {
+                                        "vcl_deliver" | "vcl_miss" | "vcl_synth" => true,
+                                        _ => false,
+                                    },
+                                    "obj" => match sub_name.as_str() {
+                                        "vcl_hit" | "vcl_deliver" => true,
+                                        _ => false,
+                                    },
+                                    _ => true,
+                                };
+
+                                if !exists_in_sub {
+                                    error_ranges.push(LintError {
+                                        message: format!(
+                                            "«{}» does not exist in «{}»",
+                                            parts[0], sub_name
+                                        ),
+                                        range,
+                                        severity: DiagnosticSeverity::ERROR,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
 
-        return Some(error_ranges);
+        return error_ranges;
     }
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         return self
             .get_error_ranges()
-            .unwrap()
             .iter()
             .map(|lint_error| Diagnostic {
                 range: lint_error.range,
@@ -301,7 +439,7 @@ impl Document {
         import_names
     }
 
-    pub fn get_includes(&self) -> Vec<String> {
+    pub fn get_includes(&self) -> VecDeque<String> {
         let ast = self.ast.clone();
         let q = Query::new(ast.language(), "(include_declaration (string) @string)").unwrap();
         let mut qc = QueryCursor::new();
@@ -310,12 +448,12 @@ impl Document {
         let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
         let capt_idx = q.capture_index_for_name("string").unwrap();
 
-        let mut include_names: Vec<String> = Vec::new();
+        let mut include_names: VecDeque<String> = VecDeque::new();
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 let text = &str[range.start_byte..range.end_byte];
-                include_names.push(text.trim_matches('"').to_string());
+                include_names.push_back(text.trim_matches('"').to_string());
             }
         }
 
@@ -343,86 +481,34 @@ impl Document {
         import_names
     }
 
-    pub fn get_new_objs<'a>(&self, scope_with_vmods: &'a Type) -> Vec<Definition> {
-        let ast = self.ast.clone();
+    pub fn get_all_definitions<'a>(&self, scope_with_vmods: &'a Type) -> Vec<Definition> {
         let q = Query::new(
-            ast.language(),
-            "(new_stmt ident: (ident) @ident def_right: (ident_call_expr ident: (_) @def_ident)) @node",
-        )
-        .unwrap();
+            self.ast.language(),
+            // "[(toplev_declaration (_ (ident) @ident ) @node), (new_stmt (ident) @ident) @node]",
+            r#"
+            [
+                (toplev_declaration (_ (ident) @ident ) @node)
+                (new_stmt ident: (ident) @ident def_right: (ident_call_expr ident: (_) @def_ident)) @node
+            ]
+            "#,
+        );
+        if let Err(err) = q {
+            debug!("Error: {}", err);
+            return vec![];
+        }
+        let q = q.unwrap();
 
         let mut qc = QueryCursor::new();
         let str = self.rope.to_string();
         let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
-        // let node_capt_idx = q.capture_index_for_name("node").unwrap();
+        let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
+        let node_capt_idx = q.capture_index_for_name("node").unwrap();
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
         let def_ident_capt_idx = q.capture_index_for_name("def_ident").unwrap();
 
         let mut defs: Vec<Definition> = Vec::new();
         for each_match in all_matches {
-            println!("match: {:?}", each_match);
-            let ident_capture = each_match
-                .captures
-                .iter()
-                .find(|c| c.index == ident_capt_idx)
-                .unwrap();
-            let def_ident_capture = each_match
-                .captures
-                .iter()
-                .find(|c| c.index == def_ident_capt_idx)
-                .unwrap();
-            let text_range = ident_capture.node.range();
-            let def_text_range = def_ident_capture.node.range();
-            let text = &str[text_range.start_byte..text_range.end_byte];
-            let def_text = &str[def_text_range.start_byte..def_text_range.end_byte];
-            let line_num = ident_capture.node.start_position().row;
-
-            let r#type = lookup_from_scope(scope_with_vmods, def_text.split('.').collect());
-
-            if r#type.is_none() {
-                continue;
-            }
-
-            let r#type = r#type.unwrap();
-            let mut r#type_box = Box::new(r#type.to_owned());
-
-            if let Type::Func(func) = r#type {
-                if let Some(func_return) = func.r#return.clone() {
-                    r#type_box = func_return;
-                }
-            }
-
-            defs.push(Definition {
-                ident_str: text.to_string(),
-                line_num,
-                doc_url: self.url.clone(),
-                r#type: r#type_box,
-            });
-        }
-
-        defs
-    }
-
-    pub fn get_all_definitions(&self) -> Vec<Definition> {
-        let ast = self.ast.clone();
-        let q = Query::new(
-            ast.language(),
-            // "[(toplev_declaration (_ (ident) @ident ) @node), (new_stmt (ident) @ident) @node]",
-            "(toplev_declaration (_ (ident) @ident ) @node)",
-        )
-        .unwrap();
-
-        let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
-        let node_capt_idx = q.capture_index_for_name("node").unwrap();
-        let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
-
-        let mut defs: Vec<Definition> = Vec::new();
-        for each_match in all_matches {
-            println!("match: {:?}", each_match);
+            // debug!("match: {:?}", each_match);
             let node_capture = each_match
                 .captures
                 .iter()
@@ -441,7 +527,38 @@ impl Document {
                 "acl_declaration" => Some(Type::Acl),
                 "backend_declaration" => Some(Type::Backend),
                 "probe_declaration" => Some(Type::Probe),
-                // "new_stmt" => Some(Type::UnresolvedNew),
+                "new_stmt" => {
+                    let def_ident_capture = each_match
+                        .captures
+                        .iter()
+                        .find(|c| c.index == def_ident_capt_idx)
+                        .unwrap();
+                    let def_text_range = def_ident_capture.node.range();
+                    let def_text = &str[def_text_range.start_byte..def_text_range.end_byte];
+                    let r#type = lookup_from_scope(scope_with_vmods, def_text.split('.').collect());
+
+                    if r#type.is_none() {
+                        continue;
+                    }
+
+                    let r#type = r#type.unwrap();
+                    let mut r#type_box = Box::new(r#type.to_owned());
+
+                    if let Type::Func(func) = r#type {
+                        if let Some(func_return) = func.r#return.clone() {
+                            r#type_box = func_return;
+                        }
+                    }
+
+                    defs.push(Definition {
+                        ident_str: text.to_string(),
+                        line_num,
+                        doc_url: self.url.as_ref().and_then(|url| Some(url.to_string())),
+                        r#type: r#type_box,
+                    });
+
+                    continue;
+                }
                 _ => None,
             };
 
@@ -449,7 +566,7 @@ impl Document {
                 defs.push(Definition {
                     ident_str: text.to_string(),
                     line_num,
-                    doc_url: self.url.clone(),
+                    doc_url: self.url.as_ref().and_then(|url| Some(url.to_string())),
                     r#type: Box::new(r#type.unwrap()),
                 });
             }
@@ -466,61 +583,98 @@ impl Document {
         pos: Position,
         global_scope: Type,
     ) -> Option<Vec<CompletionItem>> {
+        debug!("starting autocomplete");
         let ast = self.ast.clone();
         let target_point = Point {
             row: pos.line as usize,
             column: pos.character as usize,
         };
 
-        let mut node: Option<Node> = None;
         // let mut ctx_node: Option<Node> = None;
         let mut cursor = ast.walk();
+        let mut node: Node;
         let mut text = "".to_string();
         let full_text = self.rope.to_string();
         // let mut ctx_text: Option<&str> = None;
         let mut search_type: Option<&Type> = None;
-        loop {
+        let mut ignore_type: Option<Type> = None;
+        let mut last_loop = false;
+        while !last_loop {
             let idx_opt = cursor.goto_first_child_for_point(target_point);
-            if idx_opt.is_none() {
-                let mut node = cursor.node();
+            node = cursor.node();
+            debug!("visiting node {:?}", node);
 
-                /*
-                println!(
-                    "idx_opt.is_none() -> break. ended up at {:?}, search searching for {}",
-                    node.range(),
-                    target_point
-                );
-                */
+            // fix when cursor is at ;
+            if node.kind() == ";" {
+                node = node.prev_sibling().unwrap();
+                debug!("fixing ; by going to node {:?}", node);
+                last_loop = true;
+            }
 
-                let parent_node = node.parent()?;
-                match parent_node.kind() {
-                    "set_stmt" => match cursor.field_name() {
-                        Some("operator") => {
-                            text = "".to_string();
-                            if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                search_type =
-                                    lookup_from_scope_by_str(&global_scope, &ctx_node_str);
-                            }
-                            break;
-                        }
-                        Some("right") => {
-                            text = get_node_text(&self.rope, &node);
-                            if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                search_type =
-                                    lookup_from_scope_by_str(&global_scope, &ctx_node_str);
-                            }
-                            break;
-                        }
-                        _ => {
-                            text = full_text[node.byte_range()].to_string();
-                        }
+            // try to fix when tree-sitter says we're on a closing curly bracket
+            /*
+            if node.kind() == "}" {
+                node = node.prev_sibling().unwrap();
+                match node.descendant_for_point_range(target_point, target_point) {
+                    Some(possible_node) => {
+                        node = possible_node;
+                        debug!("hmm {:?}", possible_node);
                     },
-                    "backend_property" => {
-                        match cursor.field_name() {
+                    _ => {
+                        debug!("meh");
+                    }
+                }
+                debug!("fixing }} by going to node {:?}", node);
+                last_loop = true;
+            }
+            */
+
+            // gather context for autocomplete
+            if let Some(parent_node) = node.parent() {
+                match parent_node.kind() {
+                    "set_stmt" => {
+                        let mut field = cursor.field_name();
+
+                        // When the node under the cursor is «;», select the right field instead
+                        if node.kind() == ";" || node.kind() == "=" {
+                            field = Some("right");
+                        }
+
+                        match field {
                             Some("left") => {
-                                text = full_text[node.byte_range()].to_string();
+                                // ignore functions
+                                ignore_type = Some(Type::Func(Func {
+                                    ..Default::default()
+                                }));
+                            }
+                            Some("right") => {
+                                // text = get_node_text(&self.rope, &node);
+                                if let Some(ctx_node) = parent_node.child_by_field_name("left") {
+                                    let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                    search_type =
+                                        lookup_from_scope_by_str(&global_scope, &ctx_node_str);
+                                    // ignore objects here
+                                    match search_type {
+                                        Some(Type::Obj(_obj)) => {
+                                            search_type = None;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    "backend_property" => {
+                        debug!("found backend_property {:?}", cursor.field_name());
+                        let mut field = cursor.field_name();
+                        if node.kind() == ";" || node.kind() == "=" {
+                            field = Some("right");
+                        }
+
+                        match field {
+                            Some("left") => {
+                                text = get_node_text(&self.rope, &node);
                                 let parent_parent_node_kind = parent_node.parent().unwrap().kind();
                                 let fields = match parent_parent_node_kind {
                                     "probe_declaration" => PROBE_FIELDS,
@@ -538,206 +692,106 @@ impl Document {
                                         .collect(),
                                 );
                             }
+                            Some("right") => {
+                                if let Some(ctx_node) = parent_node.child_by_field_name("left") {
+                                    let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                    debug!("probe or backend. {:?} {}", ctx_node, ctx_node_str);
+                                    if ctx_node_str == "probe" {
+                                        search_type = Some(&Type::Probe);
+                                    }
+                                }
+                            }
                             _ => {}
                         };
                     }
-                    "nested_ident" => {
-                        node = node.parent().unwrap();
-                        text = full_text[node.byte_range()].to_string();
+                    "call_stmt" => {
+                        search_type = Some(&Type::Sub);
                     }
-                    _ => {
-                        text = full_text[node.byte_range()].to_string();
-                    }
+                    _ => {}
                 }
-                break;
             }
-            let search_node = cursor.node();
-            // let field_name = cursor.field_name();
-            // println!("walking: {}", search_node.kind());
-            // println!("field_name: {:?}", field_name);
-            /*
-            match search_node.kind() {
-                "set_stmt" => {
-                    println!("HMMMMMMMMMMMM {:?}", search_node);
-                    // break;
-                }
-                "nested_ident" | "ident" => {
-                    node = Some(search_node);
-                    text = full_text[search_node.byte_range()].to_string();
-                    println!("matched on idents ({}) ({:?})", text, search_node);
 
-                    if field_name.is_some() && field_name.unwrap() == "right" {
-                        let left_node = search_node
-                            .parent()
-                            .unwrap()
-                            .child_by_field_name("left")
-                            .unwrap();
-
-                        ctx_node = Some(left_node);
-                    }
-
+            // now, try to gather best identifier for autocomplete
+            match node.kind() {
+                "nested_ident" => {
+                    text = get_node_text(&self.rope, &node);
+                    debug!("got text for nested_ident {:?} {}", node, text);
                     break;
+                }
+                "ident" if node.parent().unwrap().kind() != "nested_ident" => {
+                    text = get_node_text(&self.rope, &node);
+                    debug!("got text for ident {:?} {}", node, text);
                 }
                 _ => {}
             }
-            */
-            node = Some(search_node);
+
+            if idx_opt.is_none() {
+                // has reached the end
+                break;
+            }
         }
 
-        // println!("jaggu: {:?}", search_type);
-        if node.is_none() {
+        // debug!("jaggu: {:?}", search_type);
+        // let full_text = self.rope.to_string();
+        // text = &full_text[node.start_byte()..node.end_byte()];
+        // debug!("text: {:?}", text);
+
+        // identifiers written so far
+        let idents: Vec<&str> = text.split('.').collect(); // split by dot
+                                                           // get scope from identifiers written so far (excluding the last one)
+        let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
+
+        if scope.is_none() {
             return None;
         }
 
-        let node = node.unwrap();
-        // let full_text = self.rope.to_string();
-        // text = &full_text[node.start_byte()..node.end_byte()];
-        // println!("text: {:?}", text);
+        // partial match on last identifier written
+        let last_part = idents[idents.len() - 1];
 
-        if node.parent()?.kind() == "call_stmt" {
-            if let Type::Obj(obj) = global_scope {
-                return Some(
-                    obj.properties
-                        .iter()
-                        .filter(|(_ident, r#type)| match r#type {
-                            Type::Sub => true,
-                            _ => false,
-                        })
-                        .map(|(ident, _type)| CompletionItem {
-                            label: ident.clone(),
-                            detail: Some(ident.clone()),
-                            kind: Some(CompletionItemKind::FUNCTION),
-                            ..Default::default()
-                        })
-                        .collect(),
-                );
-            }
-        } else {
-            // identifiers written so far
-            let idents: Vec<&str> = text.split('.').collect(); // split by dot
-            let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
-
-            if scope.is_some() {
-                // partial match on last identifier written
-                let last_part = idents[idents.len() - 1];
-
-                return match scope.unwrap() {
-                    Type::Obj(obj) => Some(
-                        obj.properties
-                            .range(last_part.to_string()..)
-                            .take_while(|(key, _v)| key.starts_with(&last_part))
-                            .filter(|(_prop_name, property)| {
-                                // try to match only backends when autocompleting for e.g. req.backend_hint
-                                return if let Some(search_type) = search_type {
-                                    match (search_type, property) {
-                                        (Type::Backend, Type::Backend) => true,
-                                        (Type::Backend, Type::Director) => true,
-                                        (Type::Backend, Type::Obj(_)) => {
-                                            scope_contains_backend(&property)
-                                        }
-                                        _ => false,
-                                    }
-                                } else {
-                                    // match on everything
-                                    true
-                                };
-                            })
-                            .map(|(prop_name, property)| CompletionItem {
-                                label: prop_name.to_string(),
-                                // detail: Some(prop_name.to_string()),
-                                detail: Some(match property {
-                                    Type::Func(func) => {
-                                        format!(
-                                            "{}{}",
-                                            prop_name.to_string(),
-                                            func.signature.clone().unwrap_or("()".to_string())
-                                        )
-                                    }
-                                    /*
-                                    Type::Backend => {
-                                        format!("BACKEND {}", prop_name)
-                                    }
-                                    */
-                                    _ => prop_name.to_string(),
-                                }),
-                                kind: Some(match property {
-                                    Type::Func(_func) => CompletionItemKind::FUNCTION,
-                                    Type::Obj(_obj) => CompletionItemKind::STRUCT,
-                                    _ => CompletionItemKind::PROPERTY,
-                                }),
-                                insert_text: Some(match property {
-                                    Type::Func(_func) => format!("{}(", prop_name.to_string()),
-                                    _ => prop_name.to_string(),
-                                }),
-                                ..Default::default()
-                            })
-                            .collect(),
-                    ),
-                    _ => return None,
-                };
-            }
-        }
-        /*} else {
-            return Some(vec![CompletionItem {
-                label: format!("kind: {}, text: {}", node.kind().to_string(), text),
-                detail: Some(node.kind().to_string()),
-                kind: Some(CompletionItemKind::PROPERTY),
-                ..Default::default()
-            }]);
-        }*/
-
-        return None;
+        return match scope.unwrap() {
+            Type::Obj(obj) => Some(
+                obj.properties
+                    .range(last_part.to_string()..)
+                    .take_while(|(key, _v)| key.starts_with(&last_part))
+                    .filter(|(_prop_name, property)| {
+                        // debug!("{}: {:?}", _prop_name, property);
+                        // try to match only backends when autocompleting for e.g. req.backend_hint
+                        return if let Some(search_type) = search_type {
+                            let has_type = scope_contains(property, search_type, true);
+                            debug!("{} has type {}? {}", _prop_name, search_type, has_type);
+                            has_type
+                        } else if let Some(ref ignore_type) = ignore_type {
+                            return !property.is_same_type_as(ignore_type);
+                        } else {
+                            // match on everything
+                            true
+                        };
+                    })
+                    .map(|(prop_name, property)| CompletionItem {
+                        label: prop_name.to_string(),
+                        detail: Some(match property {
+                            Type::Func(_func) => format!("{}", property),
+                            Type::Backend => format!("BACKEND {}", prop_name),
+                            _ => format!("{} {}", property, prop_name.to_string()),
+                        }),
+                        kind: Some(match property {
+                            Type::Func(_func) => CompletionItemKind::FUNCTION,
+                            Type::Obj(_obj) => CompletionItemKind::STRUCT,
+                            Type::Sub => CompletionItemKind::FUNCTION,
+                            _ => CompletionItemKind::PROPERTY,
+                        }),
+                        insert_text: Some(match property {
+                            Type::Func(_func) => format!("{}(", prop_name.to_string()),
+                            _ => prop_name.to_string(),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            _ => return None,
+        };
     }
 }
-
-/*
-fn edit_range(doc: &Document, version: i32, range: Range, text: String) -> Document {
-    let start = position_to_offset(&doc.rope, range.start);
-    let end = position_to_offset(&doc.rope, range.end);
-    let new_end_byte = start + text.as_bytes().len();
-
-    let mut new_rope = doc.rope.clone();
-    let mut new_ast = doc.ast.clone();
-
-    new_rope.edit(Interval { start, end }, text);
-    new_ast.edit(&InputEdit {
-        start_byte: start,
-        old_end_byte: end,
-        new_end_byte,
-        start_position: offset_to_point(&doc.rope, end),
-        old_end_position: offset_to_point(&doc.rope, end),
-        new_end_position: offset_to_point(&new_rope, new_end_byte),
-    });
-
-    let new_ast = doc
-        .parser
-        .lock()
-        .unwrap()
-        .parse_with(
-            &mut |offset, _pos| get_chunk(&new_rope, offset),
-            Some(&new_ast),
-        )
-        .unwrap();
-
-    Document {
-        version,
-        parser: doc.parser.clone(),
-        rope: new_rope,
-        ast: new_ast,
-    }
-}
-
-fn edit_fulltext(doc: &Document, version: i32, text: String) -> Document {
-    let rope = Rope::from(text.clone());
-    let ast = doc.parser.lock().unwrap().parse(&text, None).unwrap();
-    Document {
-        version,
-        parser: doc.parser.clone(),
-        rope,
-        ast,
-    }
-}
-*/
 
 fn position_to_offset(rope: &Rope, pos: Position) -> usize {
     let line_offset = rope.offset_of_line(pos.line as usize);
@@ -908,7 +962,7 @@ sub vcl_recv {}
 "#
             .to_string(),
         );
-        let result = doc.get_all_definitions();
+        let result = doc.get_all_definitions(&get_varnish_builtins());
         assert_eq!(result.len(), 3);
     }
 
@@ -919,7 +973,7 @@ sub vcl_recv {}
 acl a_not_this {}
 backend a_match_this {}
 sub vcl_recv {
-    if (bereq.
+    if (req.
 
     if (true) {}
 }
@@ -929,12 +983,15 @@ sub vcl_recv {
         let result = doc.autocomplete_for_pos(
             Position {
                 line: 4,
-                character: 13,
+                character: 11,
             },
             get_varnish_builtins(),
         );
         println!("result: {:?}", result);
-        assert_eq!(result.unwrap()[0].detail, Some("backend".to_string()));
+        assert_eq!(
+            result.unwrap()[0].detail,
+            Some("BACKEND backend_hint".to_string())
+        );
     }
 
     #[test]
@@ -943,6 +1000,8 @@ sub vcl_recv {
         if let Type::Obj(ref mut obj) = scope {
             obj.properties
                 .insert("localhost".to_string(), Type::Backend);
+            obj.properties
+                .insert("localhost_probe".to_string(), Type::Probe);
         }
 
         let doc = Document::new(
@@ -971,6 +1030,12 @@ sub vcl_recv {
         assert_eq!(result.len(), 1);
         */
         assert!(result.len() > 0);
+        assert!(result
+            .iter()
+            .any(|item| item.label == "localhost".to_string()));
+        assert!(!result
+            .iter()
+            .any(|item| item.label == "localhost_probe".to_string()));
     }
 
     #[test]
@@ -1024,7 +1089,7 @@ sub vcl_init {
 "#
             .to_string(),
         );
-        let result = doc.get_new_objs(&Type::Obj(Obj {
+        let result = doc.get_all_definitions(&Type::Obj(Obj {
             name: "test".to_string(),
             properties: BTreeMap::from([(
                 "directors".to_string(),
@@ -1052,6 +1117,6 @@ sub vcl_init {
             ..Default::default()
         }));
         println!("result: {:?}", result);
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 2);
     }
 }

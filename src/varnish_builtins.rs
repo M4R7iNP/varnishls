@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::mem::discriminant;
 
 use crate::document::Definition;
 
@@ -7,7 +8,7 @@ pub enum Type {
     Obj(Obj),
     Func(Func),
     Backend,
-    Director,
+    // Director,
     String,
     Number,
     Duration,
@@ -16,6 +17,51 @@ pub enum Type {
     Sub,
     Probe,
     // UnresolvedNew, // hack
+}
+
+impl Type {
+    pub fn is_same_type_as(&self, other: &Self) -> bool {
+        return discriminant(self) == discriminant(other);
+    }
+
+    pub fn can_this_cast_into(&self, other: &Self) -> bool {
+        match self {
+            Type::String | Type::Number | Type::Duration => match other {
+                Type::String | Type::Number | Type::Duration => {
+                    return true;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        return discriminant(self) == discriminant(other);
+    }
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Obj(_obj) => write!(f, "STRUCT"),
+            Type::Func(func) => write!(
+                f,
+                "{}{}{}",
+                match func.ret_type {
+                    Some(ref return_str) => format!("{} ", return_str),
+                    _ => "".to_string(),
+                },
+                func.name,
+                func.signature.clone().unwrap_or("()".to_string())
+            ),
+            Type::Backend => write!(f, "BACKEND"),
+            Type::String => write!(f, "STRING"),
+            Type::Number => write!(f, "NUMBER"),
+            Type::Duration => write!(f, "DURATION"),
+            Type::Bool => write!(f, "BOOL"),
+            Type::Acl => write!(f, "ACL"),
+            Type::Sub => write!(f, "SUBROUTINE"),
+            Type::Probe => write!(f, "PROBE"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -44,6 +90,7 @@ const DEFAULT_REQUEST_HEADERS: &'static [&str] = &[
     "if-none-match",
     "if-modified-since",
     "accept",
+    "authorization",
 ];
 
 const DEFAULT_RESPONSE_HEADERS: &'static [&str] = &[
@@ -57,6 +104,8 @@ const DEFAULT_RESPONSE_HEADERS: &'static [&str] = &[
     "content-type",
     "cache-control",
     "surrogate-control",
+    "location",
+    "set-cookie",
 ];
 
 // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L121-L130
@@ -242,12 +291,14 @@ pub fn get_varnish_builtins() -> Type {
     let regsub = Type::Func(Func {
         name: "regsub".to_string(),
         signature: Some("(STRING str, STRING regex, STRING sub)".to_string()),
+        r#return: Some(Box::new(Type::String)),
         ..Func::default()
     });
 
     let regsuball = Type::Func(Func {
         name: "regsuball".to_string(),
         signature: Some("(STRING str, STRING regex, STRING sub)".to_string()),
+        r#return: Some(Box::new(Type::String)),
         ..Func::default()
     });
 
@@ -278,12 +329,30 @@ pub fn get_varnish_builtins() -> Type {
     return global_scope;
 }
 
-pub fn scope_contains_backend(top_scope: &Type) -> bool {
-    match top_scope {
-        Type::Backend => true,
-        Type::Obj(obj) => {
-            return obj.properties.values().any(|prop| scope_contains_backend(&prop));
+/*
+ * Check if provided `scope` contains provided type (`type_to_compare`). can_this_turn_into means
+ * checking whether anything in `scope` can turn (cast) into `type_to_compare`.
+ */
+pub fn scope_contains(scope: &Type, type_to_compare: &Type, can_this_turn_into: bool) -> bool {
+    if can_this_turn_into {
+        if scope.can_this_cast_into(type_to_compare) {
+            return true;
         }
+    } else {
+        if scope.is_same_type_as(type_to_compare) {
+            return true;
+        }
+    }
+
+    match scope {
+        Type::Obj(obj) => obj
+            .properties
+            .values()
+            .any(|prop| scope_contains(prop, type_to_compare, can_this_turn_into)),
+        Type::Func(func) => match func.r#return {
+            Some(ref ret_type) => scope_contains(ret_type, type_to_compare, can_this_turn_into),
+            _ => false,
+        },
         _ => false,
     }
 }

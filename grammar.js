@@ -88,7 +88,8 @@ module.exports = grammar({
       seq(
         '.',
         field('left', $.ident),
-        optional(seq('=', optional(seq(field('right', $.expr), ';')))),
+        optional(seq('=', field('right', optional($.expr)))),
+        ';',
       ),
     // quirk, probe .request can have a list of strings
     probe_request_string_list: $ =>
@@ -125,7 +126,7 @@ module.exports = grammar({
       ),
     elsif_stmt: $ =>
       seq(
-        choice('else if', 'elsif', 'elseif'),
+        choice(seq('else', 'if'), 'elsif', 'elseif'),
         $.parenthesized_expression,
         '{',
         repeat($.stmt),
@@ -147,17 +148,23 @@ module.exports = grammar({
     new_stmt: $ =>
       seq(
         'new',
-        field('ident', $.ident),
-        '=',
-        field('def_right', $.ident_call_expr),
+        optional(
+          seq(
+            field('ident', $.ident),
+            optional(seq('=', field('def_right', $.ident_call_expr))),
+          ),
+        ),
         ';',
       ),
     set_stmt: $ =>
       seq(
         'set',
-        field('left', $.nested_ident),
-        field('operator', '='),
-        optional(field('right', $.expr)),
+        optional(
+          seq(
+            field('left', $.nested_ident),
+            optional(seq('=', field('right', choice($.expr, blank())))),
+          ),
+        ),
         ';',
       ),
     unset_stmt: $ => seq('unset', $.nested_ident, ';'),
@@ -173,13 +180,11 @@ module.exports = grammar({
     parenthesized_expression: $ => seq('(', $.expr, ')'),
 
     binary_expression: $ =>
-      choice(
-        prec.left(
-          seq(
-            field('left', $.expr),
-            field('operator', $.comp_op),
-            field('right', $.expr),
-          ),
+      prec.left(
+        seq(
+          field('left', $.expr),
+          field('operator', $.operator),
+          field('right', $.expr),
         ),
       ),
 
@@ -191,8 +196,8 @@ module.exports = grammar({
 
     eq: () => '==',
     ne: () => '!=',
-    _match: () => '~',
-    _nmatch: () => '!~',
+    rmatch: () => '~', // regex or acl
+    nmatch: () => '!~',
     g: () => '>',
     l: () => '<',
     ge: () => '>=',
@@ -201,7 +206,7 @@ module.exports = grammar({
     or: () => '||',
     and: () => '&&',
 
-    comp_op: $ =>
+    operator: $ =>
       choice(
         $.add,
         $.multiply,
@@ -209,8 +214,8 @@ module.exports = grammar({
         $.or,
         $.eq,
         $.ne,
-        $._match,
-        $._nmatch,
+        $.rmatch,
+        $.nmatch,
         // $.not,
         $.g,
         $.l,
@@ -218,7 +223,7 @@ module.exports = grammar({
         $.le,
       ),
 
-    literal: $ => choice($.string, $.number, $.duration, $.bytes),
+    literal: $ => choice($.string, $.number, $.duration, $.bytes, $.bool),
     string: () =>
       token(
         choice(
@@ -238,15 +243,18 @@ module.exports = grammar({
       seq(choice($.number, $.float), choice('B', 'KB', 'MB', 'GB', 'TB')),
 
     ident: () => /\w[\w-]*/,
-    imm_ident: () => token.immediate(/\w[\w-]*/), // immediate identifier (nested identifiers must not have whitespace)
+    // imm_ident: () => token.immediate(/\w[\w-]*/), // immediate identifier (nested identifiers must not have whitespace)
     enum_ident: () => /[A-Z_]+/,
     // optional due to autocomplete
     nested_ident: $ =>
-      seq($.ident, repeat(seq(token.immediate('.'), optional($.imm_ident)))),
-    /*
-    partial_nested_ident: ($) =>
-      seq($.ident, repeat(seq('.', optional($.ident)))),
-      */
+      seq(
+        $.ident,
+        token.immediate(
+          repeat(
+            seq(token.immediate('.'), optional(token.immediate(/\w[\w-]*/))),
+          ),
+        ),
+      ),
     varnish_internal_return_methods: $ =>
       seq(
         choice(
@@ -262,21 +270,21 @@ module.exports = grammar({
           'deliver',
           'abandon',
           'lookup',
+          'error',
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
+      ),
+    func_call_named_arg: $ =>
+      seq(
+        field('arg_name', $.nested_ident), // breaks when using $.ident
+        '=',
+        field('arg_value', choice($.expr, $.enum_ident)),
       ),
     func_call_args: $ =>
       seq(
         '(',
         optional(
-          commaSep(
-            choice(
-              // named parameter
-              seq($.ident, '=', choice($.expr, $.enum_ident)),
-              // anonymous parameter
-              choice($.expr, $.enum_ident),
-            ),
-          ),
+          commaSep(choice(choice($.expr, $.enum_ident), $.func_call_named_arg)),
         ),
         ')',
       ),
@@ -286,5 +294,10 @@ module.exports = grammar({
 });
 
 function commaSep(rule) {
-  return seq(rule, repeat(seq(',', rule)));
+  return seq(
+    rule,
+    repeat(seq(',', rule)),
+    // optional trailing comma
+    optional(','),
+  );
 }

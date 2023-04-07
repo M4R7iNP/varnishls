@@ -1,15 +1,17 @@
-use async_std::sync::{Arc, RwLock};
-// use dashmap::DashMap;
+// use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-// use std::result::Result as StdResult;
+use std::path::{Path, PathBuf};
+use tokio::sync::RwLock;
+use toml;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
+use crate::config::Config;
 use crate::document::Document;
 use crate::varnish_builtins::{get_varnish_builtins, Type};
 use crate::vmod::read_vmod_lib_by_name;
@@ -18,9 +20,10 @@ pub struct Backend {
     pub client: Client,
     // ast_map: DashMap<String, HashMap<String, Node>>,
     // pub document_map: DashMap<String, Document>,
-    pub document_map: Arc<RwLock<HashMap<String, Document>>>,
+    pub document_map: RwLock<HashMap<String, Document>>,
     // pub root_path: Option<String>,
-    pub root_uri: Arc<RwLock<Option<Url>>>,
+    pub root_uri: RwLock<Option<Url>>,
+    pub config: RwLock<Config>,
     // semantic_token_map: DashMap<String, Vec<ImCompleteSemanticToken>>,
 }
 
@@ -30,38 +33,43 @@ impl Backend {
             client,
             document_map: Default::default(),
             root_uri: Default::default(),
+            config: Default::default(),
         }
     }
 
     async fn get_all_definitions_across_all_documents(&self) -> Type {
+        let config = self.config.read().await;
         let mut scope = get_varnish_builtins();
         let doc_map = self.document_map.read().await;
         if let Type::Obj(ref mut obj) = scope {
-            for (_key, doc) in doc_map.iter() {
-                for vmod_name in doc.get_vmod_imports() {
-                    let vmod = read_vmod_lib_by_name(vmod_name.clone()).await;
-                    if let Ok(vmod) = vmod {
-                        let vmod_obj = vmod.scope;
-                        obj.properties.insert(vmod_name, vmod_obj);
-                    }
-                }
-            }
+            // read all vmods
+            let vmod_futures = doc_map
+                .values()
+                .flat_map(|doc| doc.get_vmod_imports())
+                .map(|ref vmod_name| {
+                    tokio::task::spawn(read_vmod_lib_by_name(
+                        vmod_name.into(),
+                        config.vmod_paths.to_owned(),
+                    ))
+                })
+                .collect::<Vec<_>>();
 
-            for (_key, doc) in doc_map.iter() {
-                for def in doc.get_all_definitions() {
-                    obj.properties
-                        .insert(def.ident_str.to_string(), *def.r#type);
+            for vmod_fut in vmod_futures {
+                if let Ok(Ok(Some(vmod))) = vmod_fut.await {
+                    let vmod_obj = vmod.scope;
+                    obj.properties.insert(vmod.name, vmod_obj);
                 }
             }
         }
 
-        let mut temp_map = BTreeMap::new();
+        // all objs (e.g. «new awdawd = new director.round_robin()»)
+        let mut temp_map = BTreeMap::from_iter(
+            doc_map
+                .values()
+                .flat_map(|doc| doc.get_all_definitions(&scope))
+                .map(|def| (def.ident_str.to_string(), *def.r#type)),
+        );
 
-        for (_key, doc) in doc_map.iter() {
-            for def in doc.get_new_objs(&scope) {
-                temp_map.insert(def.ident_str.to_string(), *def.r#type);
-            }
-        }
         if let Type::Obj(ref mut obj) = scope {
             obj.properties.append(&mut temp_map);
         }
@@ -74,42 +82,46 @@ impl Backend {
         *w = Some(uri);
     }
 
+    async fn set_config(&self, config: Config) {
+        let mut w = self.config.write().await;
+        *w = config;
+    }
+
+    /*
+     * TODO: doc_uri should be «main vcl» uri unless the import starts with «./»
+     */
     async fn read_includes(
         &self,
-        doc_uri: String,
-        includes: Vec<String>,
+        doc_uri: Url,
+        includes: VecDeque<String>,
     ) -> HashMap<String, Document> {
         let mut new_docs = HashMap::new();
         let mut includes_to_process = VecDeque::from(includes.clone());
 
-        self.client
-            .log_message(MessageType::INFO, format!("includes: {:?}", includes))
-            .await;
+        // debug!("includes: {:?}", includes);
 
-        let uri = Url::parse(&doc_uri).unwrap();
-        let doc_path = uri.to_file_path().unwrap().parent().unwrap().to_owned();
         loop {
             let include = match includes_to_process.pop_front() {
                 Some(val) => val,
                 None => break,
             };
 
-            let include_path_str = doc_path.join(include).to_string_lossy().to_string();
-            if new_docs.contains_key(&include_path_str) {
+            let include_uri = match doc_uri.join(&include) {
+                Ok(uri) => uri,
+                Err(_err) => continue,
+            };
+            let include_file_uri = include_uri.to_file_path().unwrap();
+            let include_file_path_str = include_file_uri.to_string_lossy().to_string();
+            if new_docs.contains_key(&include_file_path_str) {
                 continue;
             }
 
-            let file = tokio::fs::read_to_string(&include_path_str).await;
+            let file = tokio::fs::read_to_string(&include_file_path_str).await;
             if let Err(err) = file {
                 self.client
-                    .publish_diagnostics(
-                        uri.clone(),
-                        vec![Diagnostic {
-                            severity: Some(DiagnosticSeverity::ERROR),
-                            message: format!("Failed to read file {} ({})", include_path_str, err),
-                            ..Default::default()
-                        }],
-                        None,
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("Failed to read file {} ({})", include_file_path_str, err),
                     )
                     .await;
                 continue;
@@ -117,12 +129,33 @@ impl Backend {
 
             let file = file.unwrap();
             let mut included_doc = Document::new(file);
-            included_doc.url = Some(include_path_str.clone());
+            included_doc.url = Some(include_uri);
             includes_to_process.append(&mut included_doc.get_includes().into());
-            new_docs.insert(include_path_str.clone(), included_doc);
+            new_docs.insert(include_file_path_str.clone(), included_doc);
         }
 
         return new_docs;
+    }
+
+    async fn read_doc_from_path(&self, doc_url: &Url) -> Option<&Document> {
+        let file = tokio::fs::read_to_string(&doc_url.to_file_path().unwrap()).await;
+        if let Err(err) = file {
+            self.client
+                .log_message(
+                    MessageType::ERROR,
+                    format!("Failed to read file {} ({})", doc_url, err),
+                )
+                .await;
+
+            return None;
+        }
+
+        let file = file.unwrap();
+        let mut doc = Document::new(file);
+        doc.url = Some(doc_url.to_owned());
+        let mut doc_map = self.document_map.write().await;
+        doc_map.insert(doc.url.clone().unwrap().to_string().to_owned(), doc);
+        return None;
     }
 }
 
@@ -132,8 +165,47 @@ unsafe impl Sync for Backend {}
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
-        self.set_root_uri(init_params.root_uri.clone().unwrap())
-            .await;
+        let root_uri = init_params.root_uri;
+        // TODO: consider not initializing if uri scheme is not file
+
+        if let Some(root_uri) = root_uri {
+            self.set_root_uri(root_uri.clone()).await;
+
+            if root_uri.scheme() == "file" {
+                let mut root_uri = root_uri;
+                /*
+                 * Fix workspace directory missing slash
+                 */
+                if !root_uri.path().ends_with('/') {
+                    let root_path = root_uri.to_file_path().unwrap();
+                    if root_path.as_path().is_dir() {
+                        root_uri.set_path(format!("{}/", root_uri.path().to_string()).as_str());
+                        self.set_root_uri(root_uri.clone()).await;
+                    }
+                }
+
+                let config = read_config(&root_uri.to_file_path().unwrap()).await;
+                if let Some(config) = config {
+                    self.set_config(config).await;
+                }
+
+                let config = self.config.read().await;
+                if let Some(ref main_vcl_path) = config.main_vcl {
+                    let main_vcl_url = root_uri.join(&main_vcl_path.to_str().unwrap()).unwrap();
+                    self.read_doc_from_path(&main_vcl_url).await;
+                    let doc_map = self.document_map.read().await;
+                    let main_doc = doc_map.get(&main_vcl_url.to_string()).unwrap();
+                    let includes = main_doc.get_includes();
+                    drop(doc_map); // drop reference to unlock
+                    let included_docs = self.read_includes(main_vcl_url, includes).await;
+                    let mut doc_map = self.document_map.write().await;
+                    for (url_str, included_doc) in included_docs {
+                        doc_map.insert(url_str, included_doc);
+                    }
+                    drop(doc_map); // drop reference to unlock
+                }
+            }
+        }
 
         /*
         self.client
@@ -190,19 +262,16 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
+        let uri_str = uri.to_string();
         let mut document = Document::new(params.text_document.text);
-        document.url = Some(uri.to_string());
+        document.url = Some(uri.clone());
         let mut doc_map = self.document_map.write().await;
-        doc_map.insert(uri.to_string(), document);
+        doc_map.insert(uri_str, document);
 
         let doc = doc_map.get(&uri.to_string()).unwrap();
         self.client
-            .publish_diagnostics(
-                params.text_document.uri,
-                doc.diagnostics(),
-                Some(doc.version()),
-            )
+            .publish_diagnostics(uri.clone(), doc.diagnostics(), Some(doc.version()))
             .await;
 
         let includes = doc.get_includes();
@@ -211,7 +280,9 @@ impl LanguageServer for Backend {
         for (url_str, included_doc) in included_docs {
             doc_map.insert(url_str, included_doc);
         }
-        self.client.log_message(MessageType::INFO, "All included files are imported").await;
+        self.client
+            .log_message(MessageType::INFO, "All included files are imported")
+            .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -270,8 +341,8 @@ impl LanguageServer for Backend {
             data: None,
         })?;
 
-        for (uri, doc) in doc_map.iter() {
-            let result = doc.get_definition_by_name(ident.clone());
+        for (_uri, doc) in doc_map.iter() {
+            let result = doc.get_definition_by_name(&ident);
             if result.is_none() {
                 continue;
             }
@@ -290,7 +361,7 @@ impl LanguageServer for Backend {
             );
 
             return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(
-                Url::parse(uri).unwrap(),
+                doc.url.clone().unwrap(),
                 range,
             ))));
         }
@@ -323,103 +394,6 @@ impl LanguageServer for Backend {
             Some(ret)
         }();
         Ok(reference_list)
-    }
-    */
-
-    /*
-    async fn semantic_tokens_full(
-        &self,
-        params: SemanticTokensParams,
-    ) -> Result<Option<SemanticTokensResult>> {
-        let uri = params.text_document.uri.to_string();
-        self.client
-            .log_message(MessageType::LOG, "semantic_token_full")
-            .await;
-        let semantic_tokens = || -> Option<Vec<SemanticToken>> {
-            let mut im_complete_tokens = self.semantic_token_map.get_mut(&uri)?;
-            let rope = self.document_map.get(&uri)?;
-            let ast = self.ast_map.get(&uri)?;
-            let extends_tokens = semantic_token_from_ast(&ast);
-            im_complete_tokens.extend(extends_tokens);
-            im_complete_tokens.sort_by(|a, b| a.start.cmp(&b.start));
-            let mut pre_line = 0;
-            let mut pre_start = 0;
-            let semantic_tokens = im_complete_tokens
-                .iter()
-                .filter_map(|token| {
-                    let line = rope.try_byte_to_line(token.start as usize).ok()? as u32;
-                    let first = rope.try_line_to_char(line as usize).ok()? as u32;
-                    let start = rope.try_byte_to_char(token.start as usize).ok()? as u32 - first;
-                    let delta_line = line - pre_line;
-                    let delta_start = if delta_line == 0 {
-                        start - pre_start
-                    } else {
-                        start
-                    };
-                    let ret = Some(SemanticToken {
-                        delta_line,
-                        delta_start,
-                        length: token.length as u32,
-                        token_type: token.token_type as u32,
-                        token_modifiers_bitset: 0,
-                    });
-                    pre_line = line;
-                    pre_start = start;
-                    ret
-                })
-                .collect::<Vec<_>>();
-            Some(semantic_tokens)
-        }();
-        if let Some(semantic_token) = semantic_tokens {
-            return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-                result_id: None,
-                data: semantic_token,
-            })));
-        }
-        Ok(None)
-    }
-
-    async fn semantic_tokens_range(
-        &self,
-        params: SemanticTokensRangeParams,
-    ) -> Result<Option<SemanticTokensRangeResult>> {
-        let uri = params.text_document.uri.to_string();
-        let semantic_tokens = || -> Option<Vec<SemanticToken>> {
-            let im_complete_tokens = self.semantic_token_map.get(&uri)?;
-            let rope = self.document_map.get(&uri)?;
-            let mut pre_line = 0;
-            let mut pre_start = 0;
-            let semantic_tokens = im_complete_tokens
-                .iter()
-                .filter_map(|token| {
-                    let line = rope.try_byte_to_line(token.start as usize).ok()? as u32;
-                    let first = rope.try_line_to_char(line as usize).ok()? as u32;
-                    let start = rope.try_byte_to_char(token.start as usize).ok()? as u32 - first;
-                    let ret = Some(SemanticToken {
-                        delta_line: line - pre_line,
-                        delta_start: if start >= pre_start {
-                            start - pre_start
-                        } else {
-                            start
-                        },
-                        length: token.length as u32,
-                        token_type: token.token_type as u32,
-                        token_modifiers_bitset: 0,
-                    });
-                    pre_line = line;
-                    pre_start = start;
-                    ret
-                })
-                .collect::<Vec<_>>();
-            Some(semantic_tokens)
-        }();
-        if let Some(semantic_token) = semantic_tokens {
-            return Ok(Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
-                result_id: None,
-                data: semantic_token,
-            })));
-        }
-        Ok(None)
     }
     */
 
@@ -572,6 +546,20 @@ impl LanguageServer for Backend {
 
         Ok(None)
     }
+}
+
+async fn read_config(root_path: &Path) -> Option<Config> {
+    let config_path_buf = root_path.join(&PathBuf::from(".varnish_lsp.toml"));
+    let config_path = config_path_buf.as_path();
+    if !config_path.exists() {
+        return None;
+    }
+    let config_str = tokio::fs::read_to_string(config_path).await;
+    if let Ok(config_str) = config_str {
+        let config = toml::from_str(&config_str);
+        return Some(config.unwrap());
+    }
+    return None;
 }
 
 #[derive(Debug, Deserialize, Serialize)]

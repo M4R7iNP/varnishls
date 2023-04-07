@@ -1,8 +1,9 @@
 use goblin::elf::Elf;
 use serde_json::{self, Value as SerdeValue};
+use std::error::Error;
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::{collections::BTreeMap, error::Error};
+use std::path::PathBuf;
 
 use crate::varnish_builtins::{Func, Obj, Type};
 
@@ -145,10 +146,8 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
     */
 
     let mut vmod_obj = Obj {
-        name: "".to_string(),
         read_only: true,
-        definition: None,
-        properties: BTreeMap::new(),
+        ..Default::default()
     };
 
     for row in json_parsed.iter() {
@@ -200,8 +199,7 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
                 let mut obj = Obj {
                     name: name.clone(),
                     read_only: true,
-                    definition: None,
-                    properties: BTreeMap::new(),
+                    ..Default::default()
                 };
 
                 for method_serde_val in row[6..].iter() {
@@ -227,45 +225,16 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
     return Ok(Type::Obj(vmod_obj));
 }
 
-/*
-pub fn convert_to_varnish_builtin_type(vmod_json_data: VmodJsonData, name: String) -> Type {
-    let vmod = Type::Obj(Obj {
-        name,
-        read_only: true,
-        properties: BTreeMap::from_iter(vmod_json_data.funcs.iter().map(|func| {
-            (
-                func.name.clone(),
-                Type::Func(Func {
-                    name: func.name.clone(),
-                    signature: Some(format!(
-                        "({})",
-                        func.args
-                            .iter()
-                            .map(|arg| format!("{} {}", arg.input_type, arg.name))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )),
-                    definition: None,
-                }),
-            )
-        })),
-        definition: None,
-    });
-
-    return vmod;
-}
-*/
-
-pub async fn read_vmod_lib(vmod_name: String, path: String) -> Result<VmodData, Box<dyn Error>> {
-    let file = async_std::fs::read(path).await?;
+pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData, Box<dyn Error>> {
+    let file = tokio::fs::read(path).await?;
     let elf = Elf::parse(&file)?;
 
+    // Find symbol in symbol table
     let vmod_data_symbol_name = format!("Vmod_{}_Data", vmod_name);
-    let (vmd_sym_idx, vmd_sym) = elf
+    let vmd_sym = elf
         .dynsyms
         .iter()
-        .enumerate()
-        .find(|(_, sym)| {
+        .find(|sym| {
             elf.dynstrtab
                 .get_at(sym.st_name)
                 .and_then(|sym_name| Some(sym_name == vmod_data_symbol_name))
@@ -273,15 +242,16 @@ pub async fn read_vmod_lib(vmod_name: String, path: String) -> Result<VmodData, 
         })
         .ok_or("Could not find vmod data symbol")?;
 
+    // Section for the symbol data
     let sec = &elf
         .section_headers
         .get(vmd_sym.st_shndx)
         .expect("Could not find section");
-    let offset = sec.sh_offset as usize + vmd_sym_idx as usize * sec.sh_entsize as usize;
 
-    let vmd_ptr =
-        unsafe { std::mem::transmute::<_, *const VmodDataCStruct>(file[offset..].as_ptr()) };
-    let vmd = unsafe { &*vmd_ptr };
+    // Offset in binary for symbol value
+    let offset = sec.sh_offset as usize + vmd_sym.st_value as usize - sec.sh_addr as usize;
+    // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
+    let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
     let json = unsafe { CStr::from_ptr((file[(vmd.json as usize)..].as_ptr()) as *const i8) }
         .to_string_lossy();
@@ -311,7 +281,39 @@ pub async fn read_vmod_lib(vmod_name: String, path: String) -> Result<VmodData, 
     });
 }
 
-pub async fn read_vmod_lib_by_name(name: String) -> Result<VmodData, Box<dyn Error>> {
-    let path = format!("/usr/lib/varnish-plus/vmods/libvmod_{}.so", name);
-    return read_vmod_lib(name, path).await;
+const DEFAULT_SEARCH_PATHS: &'static [&str] = &[
+    // ubuntu, debian
+    "/usr/lib/x86_64-linux-gnu/varnish/vmods/",
+    // fedora, centos
+    "/usr/lib64/varnish/vmods/",
+    // freebsd
+    "/usr/local/lib/varnish/vmods",
+    // arch
+    "/usr/lib/varnish/vmods",
+];
+
+pub async fn read_vmod_lib_by_name(
+    name: String,
+    search_paths: Vec<PathBuf>,
+) -> Result<Option<VmodData>, Box<dyn Error + Send + Sync>> {
+    let mut search_paths = search_paths;
+    if search_paths.len() == 0 {
+        search_paths = DEFAULT_SEARCH_PATHS
+            .iter()
+            .map(|str| PathBuf::from(str))
+            .collect();
+    }
+
+    let file_name = format!("libvmod_{}.so", name);
+    for search_path in search_paths {
+        let path = search_path.join(&file_name);
+        if path.exists() {
+            return match read_vmod_lib(name, path).await {
+                Ok(result) => Ok(Some(result)),
+                Err(err) => Err(err.to_string().into()),
+            };
+        }
+    }
+
+    return Ok(None);
 }
