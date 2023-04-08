@@ -2,6 +2,8 @@
 
 This is a Varnish VCL language server. Provides some autocomplete, jump to definition across files and basic linting. Made for Varnish 6.0 (plus), but it should work with other versions - except Fastly.
 
+[![asciicast](https://asciinema.org/a/575554.svg)](https://asciinema.org/a/575554)
+
 ## Setup
 ```
 npm i
@@ -29,7 +31,7 @@ lsp_configs.vcl = {
     cmd = { "/home/martin/varnish-lsp/target/debug/lsp", "--stdio" },
     filetypes = { "vcl" },
     root_dir = function(fname)
-      return lspconfig.util.find_git_ancestor(fname) or vim.fn.getcwd()
+      return lspconfig.util.root_pattern(".varnish_lsp.toml")(fname) or lspconfig.util.find_git_ancestor(fname) or vim.fn.getcwd()
     end,
     settings = {},
   }

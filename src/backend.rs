@@ -1,4 +1,4 @@
-// use log::debug;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -98,8 +98,6 @@ impl Backend {
         let mut new_docs = HashMap::new();
         let mut includes_to_process = VecDeque::from(includes.clone());
 
-        // debug!("includes: {:?}", includes);
-
         loop {
             let include = match includes_to_process.pop_front() {
                 Some(val) => val,
@@ -112,7 +110,11 @@ impl Backend {
             };
             let include_file_uri = include_uri.to_file_path().unwrap();
             let include_file_path_str = include_file_uri.to_string_lossy().to_string();
-            if new_docs.contains_key(&include_file_path_str) {
+            let doc_already_exists = {
+                let map = self.document_map.read().await;
+                map.contains_key(&include_file_path_str)
+            };
+            if doc_already_exists || new_docs.contains_key(&include_file_path_str) {
                 continue;
             }
 
@@ -137,7 +139,7 @@ impl Backend {
         return new_docs;
     }
 
-    async fn read_doc_from_path(&self, doc_url: &Url) -> Option<&Document> {
+    async fn read_doc_from_path(&self, doc_url: &Url) {
         let file = tokio::fs::read_to_string(&doc_url.to_file_path().unwrap()).await;
         if let Err(err) = file {
             self.client
@@ -147,7 +149,7 @@ impl Backend {
                 )
                 .await;
 
-            return None;
+            return;
         }
 
         let file = file.unwrap();
@@ -155,7 +157,7 @@ impl Backend {
         doc.url = Some(doc_url.to_owned());
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(doc.url.clone().unwrap().to_string().to_owned(), doc);
-        return None;
+        return;
     }
 }
 
@@ -275,9 +277,10 @@ impl LanguageServer for Backend {
             .await;
 
         let includes = doc.get_includes();
-        // drop(doc_map); // drop reference, unlocks lock
+        drop(doc_map); // drop reference, unlocks lock
         let included_docs = self.read_includes(uri, includes).await;
         for (url_str, included_doc) in included_docs {
+            let mut doc_map = self.document_map.write().await;
             doc_map.insert(url_str, included_doc);
         }
         self.client
@@ -286,7 +289,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
         let version = params.text_document.version;
         let changes = params
             .content_changes
@@ -294,17 +297,26 @@ impl LanguageServer for Backend {
             .map(|change| (change.range, change.text));
 
         let mut doc_map = self.document_map.write().await;
-        let doc = doc_map.get_mut(&uri).unwrap();
+        let doc = doc_map.get_mut(&uri.to_string()).unwrap();
         doc.edit(version, changes);
 
         // let doc = self.document_map.get(&uri.clone()).unwrap();
         self.client
             .publish_diagnostics(
-                params.text_document.uri,
+                uri.clone(),
                 doc.diagnostics(),
                 Some(doc.version()),
             )
             .await;
+
+
+        let includes = doc.get_includes();
+        drop(doc_map);
+        let included_docs = self.read_includes(uri, includes).await;
+        for (url_str, included_doc) in included_docs {
+            let mut doc_map = self.document_map.write().await;
+            doc_map.insert(url_str, included_doc);
+        }
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
