@@ -34,6 +34,7 @@
 
 (operator) @operator
 "=" @operator
+"!" @operator
 
 [
   "."
@@ -57,20 +58,23 @@
 (bool) @constant.builtin
 
 (ident_call_expr
-  ident: (nested_ident) @name) @function.call
+  ident: (nested_ident) @function.call)
 (ident_call_expr
-  ident: (nested_ident) @name (#eq? @name "regsub")) @function.builtin
-(ident_call_expr
-  ident: (nested_ident) @name (#eq? @name "regsuball")) @function.builtin
-(ident_call_expr
-  ident: (nested_ident) @name (#eq? @name "hash_data")) @function.builtin
-(ident_call_expr
-  ident: (nested_ident) @name (#eq? @name "synthetic")) @function.builtin
-(ident_call_expr
-  ident: (nested_ident) @name (#eq? @name "ban")) @function.builtin
+  ident: (nested_ident) @name (#any-of? @name "regsub" "regsuball" "hash_data" "synthetic" "ban")) @function.builtin
 
 (ident) @variable
 (nested_ident) @variable
+[
+  ((nested_ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess)"))
+  ((ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess)"))
+] @variable.builtin
 (enum_ident) @constant
+
+(binary_expression
+  operator: (operator (rmatch))
+  right: (literal (string) @string.regex (#offset! @string.regex 0 1 0 -1)))
+
+(func_call_named_arg
+   arg_name: (nested_ident (ident) @parameter))
 
 (COMMENT) @comment

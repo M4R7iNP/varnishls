@@ -1,6 +1,6 @@
 use crate::{
     parser::parser,
-    varnish_builtins::{scope_contains, Func, Obj, Type, BACKEND_FIELDS, PROBE_FIELDS},
+    varnish_builtins::{scope_contains, Func, Type, BACKEND_FIELDS, PROBE_FIELDS},
 };
 
 use log::debug;
@@ -31,9 +31,9 @@ pub struct Definition {
 
 #[derive(Debug)]
 pub struct LintError {
-    message: String,
-    severity: DiagnosticSeverity,
-    range: Range,
+    pub message: String,
+    pub severity: DiagnosticSeverity,
+    pub range: Range,
 }
 
 // reserved keywords, without top-level only declarations
@@ -847,6 +847,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::varnish_builtins::get_varnish_builtins;
+    use crate::varnish_builtins::Obj;
 
     use super::*;
 

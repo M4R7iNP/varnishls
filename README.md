@@ -6,9 +6,8 @@ This is a Varnish VCL language server. Provides some autocomplete, jump to defin
 
 ## Setup
 ```
-npm i
-npx tree-sitter generate
-cargo build --bin lsp
+make tree-sitter-vcl
+make build
 ```
 
 #### Config
@@ -28,7 +27,7 @@ local lsp_configs = require('lspconfig.configs')
 lsp_configs.vcl = {
   default_config = {
     -- Change the path to varnish-lsp (add --debug for debug log)
-    cmd = { "/home/martin/varnish-lsp/target/debug/lsp", "--stdio" },
+    cmd = { "/home/martin/varnish-lsp/target/debug/varnish_lsp", "lsp", "--stdio" },
     filetypes = { "vcl" },
     root_dir = function(fname)
       return lspconfig.util.root_pattern(".varnish_lsp.toml")(fname) or lspconfig.util.find_git_ancestor(fname) or vim.fn.getcwd()
@@ -43,7 +42,7 @@ It is technically possible to use the tree-sitter grammar for syntax highlightin
 local parser_config = require "nvim-treesitter.parsers".get_parser_configs()
 parser_config.vcl = {
   install_info = {
-    url = "~/tree-sitter-vcl", -- path to this repo
+    url = "~/<path to this repo>/vendor/tree-sitter-vcl",
     files = {"src/parser.c"},
   }
 }

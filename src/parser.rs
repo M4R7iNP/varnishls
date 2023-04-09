@@ -1,12 +1,9 @@
-use tree_sitter::{Language, Parser, Tree};
-
-extern "C" {
-    fn tree_sitter_vcl() -> Language;
-}
+use tree_sitter::{Parser, Tree};
+use tree_sitter_vcl;
 
 pub fn parse(src: &str) -> Tree {
     let mut parser = Parser::new();
-    let language = unsafe { tree_sitter_vcl() };
+    let language = tree_sitter_vcl::language();
     parser.set_language(language).unwrap();
     let ast = parser.parse(&src, None).unwrap();
     let root_node = ast.root_node();
@@ -16,7 +13,7 @@ pub fn parse(src: &str) -> Tree {
 }
 
 pub fn parser() -> Parser {
-    let language = unsafe { tree_sitter_vcl() };
+    let language = tree_sitter_vcl::language();
     let mut parser = Parser::new();
     parser.set_language(language).unwrap();
     parser

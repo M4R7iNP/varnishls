@@ -1022,6 +1022,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-vcl"
+version = "0.0.1"
+dependencies = [
+ "cc",
+ "tree-sitter",
+]
+
+[[package]]
 name = "unicode-bidi"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1083,6 +1091,7 @@ dependencies = [
  "toml",
  "tower-lsp",
  "tree-sitter",
+ "tree-sitter-vcl",
  "xi-rope",
 ]
 

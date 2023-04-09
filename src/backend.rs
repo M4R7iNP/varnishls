@@ -1,4 +1,4 @@
-use log::debug;
+// use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -89,6 +89,7 @@ impl Backend {
 
     /*
      * TODO: doc_uri should be «main vcl» uri unless the import starts with «./»
+     * TODO: parallelize with tokio?
      */
     async fn read_includes(
         &self,
