@@ -131,8 +131,7 @@ impl Backend {
             }
 
             let file = file.unwrap();
-            let mut included_doc = Document::new(file);
-            included_doc.url = Some(include_uri);
+            let included_doc = Document::new(include_uri, file);
             includes_to_process.append(&mut included_doc.get_includes().into());
             new_docs.insert(include_file_path_str.clone(), included_doc);
         }
@@ -154,10 +153,9 @@ impl Backend {
         }
 
         let file = file.unwrap();
-        let mut doc = Document::new(file);
-        doc.url = Some(doc_url.to_owned());
+        let doc = Document::new(doc_url.clone(), file);
         let mut doc_map = self.document_map.write().await;
-        doc_map.insert(doc.url.clone().unwrap().to_string().to_owned(), doc);
+        doc_map.insert(doc.url.to_string(), doc);
         return;
     }
 }
@@ -218,7 +216,7 @@ impl LanguageServer for Backend {
 
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
-                name: "varnish_lsp".to_string(),
+                name: "varnishls".to_string(),
                 version: None,
             }),
             offset_encoding: None,
@@ -230,7 +228,7 @@ impl LanguageServer for Backend {
                 )),
 
                 completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(true),
+                    resolve_provider: Some(false),
                     trigger_characters: Some(vec![".".to_string(), " ".to_string()]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
@@ -267,8 +265,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let uri_str = uri.to_string();
-        let mut document = Document::new(params.text_document.text);
-        document.url = Some(uri.clone());
+        let document = Document::new(uri.to_owned(), params.text_document.text);
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(uri_str, document);
 
@@ -303,13 +300,8 @@ impl LanguageServer for Backend {
 
         // let doc = self.document_map.get(&uri.clone()).unwrap();
         self.client
-            .publish_diagnostics(
-                uri.clone(),
-                doc.diagnostics(),
-                Some(doc.version()),
-            )
+            .publish_diagnostics(uri.clone(), doc.diagnostics(), Some(doc.version()))
             .await;
-
 
         let includes = doc.get_includes();
         drop(doc_map);
@@ -374,7 +366,7 @@ impl LanguageServer for Backend {
             );
 
             return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(
-                doc.url.clone().unwrap(),
+                doc.url.to_owned(),
                 range,
             ))));
         }
@@ -382,33 +374,38 @@ impl LanguageServer for Backend {
         return Ok(None);
     }
 
-    /*
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let reference_list = || -> Option<Vec<Location>> {
-            let uri = params.text_document_position.text_document.uri;
-            let ast = self.ast_map.get(&uri.to_string())?;
-            let rope = self.document_map.get(&uri.to_string())?;
+        let src_uri = params.text_document_position.text_document.uri;
+        let doc_map = self.document_map.read().await;
+        let doc = doc_map.get(&src_uri.to_string()).ok_or(Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: "Could not find source document".to_string(),
+            data: None,
+        })?;
+        let position = params.text_document_position.position;
+        let point = Point {
+            row: position.line as usize,
+            column: position.character as usize,
+        };
 
-            let position = params.text_document_position.position;
-            let char = rope.try_line_to_char(position.line as usize).ok()?;
-            let offset = char + position.character as usize;
-            let reference_list = get_reference(&ast, offset, false);
-            let ret = reference_list
-                .into_iter()
-                .filter_map(|(_, range)| {
-                    let start_position = offset_to_position(range.start, &rope)?;
-                    let end_position = offset_to_position(range.end, &rope)?;
+        let ident = doc.get_ident_at_point(point).ok_or(Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: "Could not find ident".to_string(),
+            data: None,
+        })?;
 
-                    let range = Range::new(start_position, end_position);
+        let refs = doc_map
+            .values()
+            .flat_map(|doc| doc.get_references_for_ident(ident.as_str()))
+            .map(|reference| reference.uri.to_owned())
+            .collect::<Vec<_>>();
 
-                    Some(Location::new(uri.clone(), range))
-                })
-                .collect::<Vec<_>>();
-            Some(ret)
-        }();
-        Ok(reference_list)
+        if refs.len() == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(refs))
     }
-    */
 
     /*
     async fn inlay_hint(
@@ -562,7 +559,7 @@ impl LanguageServer for Backend {
 }
 
 async fn read_config(root_path: &Path) -> Option<Config> {
-    let config_path_buf = root_path.join(&PathBuf::from(".varnish_lsp.toml"));
+    let config_path_buf = root_path.join(&PathBuf::from(".varnishls.toml"));
     let config_path = config_path_buf.as_path();
     if !config_path.exists() {
         return None;

@@ -1,5 +1,6 @@
 use tree_sitter::{Parser, Tree};
 use tree_sitter_vcl;
+use tree_sitter_vtc;
 
 pub fn parse(src: &str) -> Tree {
     let mut parser = Parser::new();
@@ -12,8 +13,15 @@ pub fn parse(src: &str) -> Tree {
     return ast;
 }
 
-pub fn parser() -> Parser {
+pub fn vcl() -> Parser {
     let language = tree_sitter_vcl::language();
+    let mut parser = Parser::new();
+    parser.set_language(language).unwrap();
+    parser
+}
+
+pub fn vtc() -> Parser {
+    let language = tree_sitter_vtc::language();
     let mut parser = Parser::new();
     parser.set_language(language).unwrap();
     parser

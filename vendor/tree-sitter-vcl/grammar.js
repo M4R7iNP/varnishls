@@ -10,7 +10,7 @@
 module.exports = grammar({
   name: 'vcl',
 
-  word: $ => $.ident,
+  // word: $ => $._word,
   extras: $ => [/\s+/, $.COMMENT, $.inline_c],
   inline: $ => [$.expr, $.inline_c],
 
@@ -81,7 +81,7 @@ module.exports = grammar({
         optional(seq('from', $.string)),
         ';',
       ),
-    vcl_version_declaration: $ => seq('vcl', $.float, ';'),
+    vcl_version_declaration: $ => seq('vcl', $.number, ';'),
     include_declaration: $ => seq('include', $.string, ';'),
 
     backend_property: $ =>
@@ -118,19 +118,15 @@ module.exports = grammar({
       seq(
         'if',
         field('condition', $.parenthesized_expression),
-        '{',
-        field('consequence', repeat($.stmt)),
-        '}',
+        field('consequence', seq('{', repeat($.stmt), '}')),
         repeat($.elsif_stmt),
         optional($.else_stmt),
       ),
     elsif_stmt: $ =>
       seq(
         choice(seq('else', 'if'), 'elsif', 'elseif'),
-        $.parenthesized_expression,
-        '{',
-        repeat($.stmt),
-        '}',
+        field('condition', $.parenthesized_expression),
+        field('consequence', seq('{', repeat($.stmt), '}')),
       ),
     else_stmt: $ => seq('else', '{', repeat($.stmt), '}'),
     call_stmt: $ => seq('call', field('ident', $.ident), ';'), // subroutine call expr (e.g. «call strip_query_params;»)
@@ -223,35 +219,31 @@ module.exports = grammar({
         $.le,
       ),
 
-    literal: $ => choice($.string, $.number, $.duration, $.bytes, $.bool),
+    literal: $ => choice($.string, $.duration, $.bytes, $.number, $.bool),
     string: () =>
       token(
         choice(
-          seq('"', /[^"]*/, '"'),
+          // seq('"', /[^"]*/, '"'),
+          seq('"', /([^\"]*(\\"|\\)?)*/, '"'),
           seq('{"', /[^"]*"+([^}"][^"]*"+)*/, '}'),
         ),
       ),
-    number: () => /-?\d+/,
-    float: () => /-?\d+\.\d+/,
+    number: () => /-?\d+(\.\d+)?/,
     // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_utils.c#L300
-    duration: $ =>
-      seq(
-        choice($.number, $.float),
-        choice('ms', 's', 'm', 'h', 'd', 'w', 'y'),
-      ),
-    bytes: $ =>
-      seq(choice($.number, $.float), choice('B', 'KB', 'MB', 'GB', 'TB')),
+    duration: $ => seq($.number, choice('ms', 's', 'm', 'h', 'd', 'w', 'y')),
+    bytes: $ => seq($.number, choice('B', 'KB', 'MB', 'GB', 'TB')),
 
-    ident: () => /\w[\w-]*/,
-    // imm_ident: () => token.immediate(/\w[\w-]*/), // immediate identifier (nested identifiers must not have whitespace)
+    ident: () => /[a-zA-Z][\w-]*/, // ident must start with a letter
     enum_ident: () => /[A-Z_]+/,
     // optional due to autocomplete
-    nested_ident: $ =>
-      seq(
-        $.ident,
-        token.immediate(
-          repeat(
-            seq(token.immediate('.'), optional(token.immediate(/\w[\w-]*/))),
+    nested_ident: () =>
+      token(
+        seq(
+          /[a-zA-Z][\w-]*/,
+          token.immediate(
+            repeat(
+              seq(token.immediate('.'), optional(token.immediate(/\w[\w-]*/))),
+            ),
           ),
         ),
       ),
@@ -291,6 +283,7 @@ module.exports = grammar({
       ),
 
     inline_c: _$ => seq('C{', /[^}]*?}/, token.immediate('C')),
+    // _word: () => /[\w-]+/,
   },
 });
 

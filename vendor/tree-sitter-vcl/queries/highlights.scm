@@ -52,7 +52,7 @@
 
 (string) @string
 (number) @number
-(float) @number
+; (float) @number
 (duration) @number
 (bytes) @number
 (bool) @constant.builtin
@@ -75,6 +75,6 @@
   right: (literal (string) @string.regex (#offset! @string.regex 0 1 0 -1)))
 
 (func_call_named_arg
-   arg_name: (nested_ident (ident) @parameter))
+   arg_name: (nested_ident) @parameter)
 
 (COMMENT) @comment

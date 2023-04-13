@@ -87,12 +87,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
-name = "bytecount"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be0fdd54b507df8f22012890aadd099979befdba27713c767993f8380112ca7c"
-
-[[package]]
 name = "bytes"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1013,9 +1007,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.20.9"
+version = "0.20.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4423c784fe11398ca91e505cdc71356b07b1a924fc8735cfab5333afe3e18bc"
+checksum = "e747b1f9b7b931ed39a548c1fae149101497de3c1fc8d9e18c62c1a66c683d3d"
 dependencies = [
  "cc",
  "regex",
@@ -1023,6 +1017,14 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-vcl"
+version = "0.0.1"
+dependencies = [
+ "cc",
+ "tree-sitter",
+]
+
+[[package]]
+name = "tree-sitter-vtc"
 version = "0.0.1"
 dependencies = [
  "cc",
@@ -1051,12 +1053,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unicode-segmentation"
-version = "1.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
-
-[[package]]
 name = "url"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1075,7 +1071,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
-name = "varnish-lsp"
+name = "varnishls"
 version = "0.1.0"
 dependencies = [
  "cc",
@@ -1092,7 +1088,7 @@ dependencies = [
  "tower-lsp",
  "tree-sitter",
  "tree-sitter-vcl",
- "xi-rope",
+ "tree-sitter-vtc",
 ]
 
 [[package]]
@@ -1211,16 +1207,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae8970b36c66498d8ff1d66685dc86b91b29db0c7739899012f63a63814b4b28"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "xi-rope"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1266c6612194a86462905372bc7bbc9887e3f3826da6b82ea4a35492bc65d5a"
-dependencies = [
- "bytecount",
- "memchr",
- "regex",
- "unicode-segmentation",
 ]

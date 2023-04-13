@@ -1,16 +1,22 @@
 use crate::{
-    parser::parser,
+    parser,
     varnish_builtins::{scope_contains, Func, Type, BACKEND_FIELDS, PROBE_FIELDS},
 };
 
 use log::debug;
+use ropey::Rope;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, Tree};
-use xi_rope::{rope::Utf16CodeUnitsMetric, Interval, Rope};
+
+#[derive(Clone, Copy)]
+pub enum FileType {
+    Vcl,
+    Vtc,
+}
 
 #[derive(Clone)]
 pub struct Document {
@@ -18,7 +24,8 @@ pub struct Document {
     parser: Arc<Mutex<Parser>>,
     pub rope: Rope,
     pub ast: Tree,
-    pub url: Option<Url>,
+    pub url: Url,
+    pub filetype: FileType,
 }
 
 #[derive(Debug, Clone)]
@@ -29,11 +36,19 @@ pub struct Definition {
     pub doc_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Reference {
+    pub ident_str: String,
+    pub line_num: usize,
+    pub doc_url: Option<String>,
+    pub uri: Location,
+}
+
 #[derive(Debug)]
 pub struct LintError {
     pub message: String,
     pub severity: DiagnosticSeverity,
-    pub range: Range,
+    pub loc: Location,
 }
 
 // reserved keywords, without top-level only declarations
@@ -41,34 +56,45 @@ const RESERVED_KEYWORDS: &'static [&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
 ];
 
-pub fn get_node_text(rope: &Rope, node: &Node) -> String {
-    let mut str = &rope.to_string()[node.byte_range()];
-    if let Some((first_part, _)) = str.split_once('\n') {
-        str = first_part;
+pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
+    let mut text = rope.byte_slice(node.byte_range()).to_string();
+    if let Some((first_part, _)) = text.split_once('\n') {
+        text = first_part.to_string();
     }
 
-    if RESERVED_KEYWORDS.contains(&str) {
-        return "".to_string();
+    if RESERVED_KEYWORDS.contains(&text.as_str()) {
+        return "".into();
     }
 
-    return str.to_string();
+    return text;
 }
 
 unsafe impl Send for Document {}
 unsafe impl Sync for Document {}
 
 impl Document {
-    pub fn new(text: String) -> Self {
-        let mut parser = parser();
+    pub fn new(url: Url, text: String) -> Self {
+        let mut filetype = FileType::Vcl;
+        if url.path().ends_with(".vtc") {
+            filetype = FileType::Vtc;
+        }
+
+        let mut parser = match filetype {
+            FileType::Vcl => parser::vcl(),
+            FileType::Vtc => parser::vtc(),
+        };
+
         let ast = parser.parse(&text, None).unwrap();
-        let rope = Rope::from(text);
         let parser = Arc::new(Mutex::new(parser));
+        let rope = Rope::from(text);
+
         Self {
             version: 0,
             rope,
             parser,
             ast,
-            url: None,
+            url,
+            filetype: FileType::Vcl,
         }
     }
 
@@ -90,21 +116,51 @@ impl Document {
     }
 
     fn edit_range(&mut self, _version: i32, range: Range, text: String) {
-        let start = position_to_offset(&self.rope, range.start);
-        let end = position_to_offset(&self.rope, range.end);
-        let new_end_byte = start + text.as_bytes().len();
+        // let start = position_to_offset(&self.rope, range.start);
+        // let end = position_to_offset(&self.rope, range.end);
+        // let new_end_byte = start + text.as_bytes().len();
 
-        let mut new_rope = self.rope.clone();
+        // let mut new_rope = self.rope.clone();
         let mut new_ast = self.ast.clone();
 
-        new_rope.edit(Interval { start, end }, text);
+        let old_end_position_point = Point {
+            row: range.end.line as usize,
+            column: range.end.character as usize,
+        };
+
+        let start_col = self
+            .rope
+            .line(range.start.line as usize)
+            .utf16_cu_to_char(range.start.character as usize);
+        let end_col = self
+            .rope
+            .line(range.end.line as usize)
+            .utf16_cu_to_char(range.end.character as usize);
+        let start = self.rope.line_to_char(range.start.line as usize) + start_col as usize;
+        let end = self.rope.line_to_char(range.end.line as usize) + end_col as usize;
+        let old_end_byte = self.rope.char_to_byte(end);
+        self.rope.remove(start..end);
+        self.rope.insert(start, text.as_str());
+        let start_byte = self.rope.char_to_byte(start);
+        let new_end_byte = start_byte + text.as_bytes().len();
+        let new_end_line = self.rope.byte_to_line(new_end_byte);
+        let new_end_col =
+            self.rope.byte_to_char(new_end_byte) - self.rope.line_to_char(new_end_line);
+        let new_end_position_point = Point {
+            row: new_end_line,
+            column: new_end_col,
+        };
+
         new_ast.edit(&InputEdit {
-            start_byte: start,
-            old_end_byte: end,
+            start_byte,
+            old_end_byte,
             new_end_byte,
-            start_position: offset_to_point(&self.rope, end),
-            old_end_position: offset_to_point(&self.rope, end),
-            new_end_position: offset_to_point(&new_rope, new_end_byte),
+            start_position: Point {
+                row: range.start.line as usize,
+                column: range.start.character as usize,
+            },
+            old_end_position: old_end_position_point,
+            new_end_position: new_end_position_point,
         });
 
         let new_new_ast = self
@@ -112,12 +168,15 @@ impl Document {
             .lock()
             .unwrap()
             .parse_with(
-                &mut |offset, _pos| get_chunk(&new_rope, offset),
+                &mut |offset, _pos| {
+                    let (chunk, chunk_byte_idx, _, _) = self.rope.chunk_at_byte(offset);
+                    &chunk.as_bytes()[(offset - chunk_byte_idx)..]
+                },
                 Some(&new_ast),
             )
             .unwrap();
 
-        self.rope = new_rope;
+        // self.rope = new_rope;
         self.ast = new_new_ast;
     }
 
@@ -134,7 +193,7 @@ impl Document {
             .root_node()
             .descendant_for_point_range(point, point)?;
         let name = get_node_text(&self.rope, &node);
-        return Some(name);
+        return Some(name.to_string());
     }
 
     pub fn get_definition_by_name(&self, name: &String) -> Option<(Point, Point)> {
@@ -216,7 +275,7 @@ impl Document {
             if node.is_error() {
                 error_ranges.push(LintError {
                     message: "Syntax error".to_string(),
-                    range,
+                    loc: Location { uri: self.url.to_owned(), range },
                     severity: DiagnosticSeverity::ERROR,
                 });
                 recurse = false;
@@ -226,7 +285,7 @@ impl Document {
             if node.is_missing() {
                 error_ranges.push(LintError {
                     message: format!("Expected {}", node.kind()),
-                    range,
+                    loc: Location { uri: self.url.to_owned(), range },
                     severity: DiagnosticSeverity::ERROR,
                 });
                 recurse = false;
@@ -239,7 +298,7 @@ impl Document {
                     if left.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing set property".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -249,7 +308,7 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing set value".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -260,7 +319,7 @@ impl Document {
                     if left.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing identifier".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -270,7 +329,7 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing value".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -282,7 +341,7 @@ impl Document {
                         None => {
                             error_ranges.push(LintError {
                                 message: "Missing backend property field".to_string(),
-                                range,
+                                loc: Location { uri: self.url.to_owned(), range },
                                 severity: DiagnosticSeverity::ERROR,
                             });
                             continue;
@@ -298,7 +357,7 @@ impl Document {
                             if !fields.iter().any(|field| field == &text) {
                                 error_ranges.push(LintError {
                                     message: format!("Backend property «{}» does not exist", text),
-                                    range,
+                                    loc: Location { uri: self.url.to_owned(), range },
                                     severity: DiagnosticSeverity::ERROR,
                                 });
                             }
@@ -309,7 +368,7 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing backend property value".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -320,7 +379,7 @@ impl Document {
                     if RESERVED_KEYWORDS.contains(&text) {
                         error_ranges.push(LintError {
                             message: "Reserved keyword".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -328,7 +387,7 @@ impl Document {
                     if text.ends_with('.') {
                         error_ranges.push(LintError {
                             message: "Identifier ending with dot?".to_string(),
-                            range,
+                            loc: Location { uri: self.url.to_owned(), range },
                             severity: DiagnosticSeverity::WARNING,
                         });
                         continue;
@@ -352,32 +411,33 @@ impl Document {
 
                     if toplev_decl.kind() == "sub_declaration" {
                         if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
-                            let sub_name = get_node_text(&self.rope, &ident_node);
+                            let sub_name_string = get_node_text(&self.rope, &ident_node);
+                            let sub_name = sub_name_string.as_str();
                             let parts = text.split('.').collect::<Vec<&str>>();
                             if sub_name.starts_with("vcl_") {
                                 let exists_in_sub = match parts[0] {
-                                    "req" => match sub_name.as_str() {
+                                    "req" => match sub_name {
                                         "vcl_recv" | "vcl_deliver" | "vcl_synth" | "vcl_miss"
                                         | "vcl_hit" | "vcl_pass" | "vcl_purge" | "vcl_pipe"
                                         | "vcl_hash" => true,
                                         _ => false,
                                     },
-                                    "bereq" => match sub_name.as_str() {
+                                    "bereq" => match sub_name {
                                         "vcl_backend_fetch"
                                         | "vcl_backend_response"
                                         | "vcl_pipe"
                                         | "vcl_backend_error" => true,
                                         _ => false,
                                     },
-                                    "beresp" => match sub_name.as_str() {
+                                    "beresp" => match sub_name {
                                         "vcl_backend_response" | "vcl_backend_error" => true,
                                         _ => false,
                                     },
-                                    "resp" => match sub_name.as_str() {
+                                    "resp" => match sub_name {
                                         "vcl_deliver" | "vcl_miss" | "vcl_synth" => true,
                                         _ => false,
                                     },
-                                    "obj" => match sub_name.as_str() {
+                                    "obj" => match sub_name {
                                         "vcl_hit" | "vcl_deliver" => true,
                                         _ => false,
                                     },
@@ -390,7 +450,7 @@ impl Document {
                                             "«{}» does not exist in «{}»",
                                             parts[0], sub_name
                                         ),
-                                        range,
+                                        loc: Location { uri: self.url.to_owned(), range },
                                         severity: DiagnosticSeverity::ERROR,
                                     });
                                 }
@@ -410,7 +470,7 @@ impl Document {
             .get_error_ranges()
             .iter()
             .map(|lint_error| Diagnostic {
-                range: lint_error.range,
+                range: lint_error.loc.range,
                 severity: Some(lint_error.severity),
                 message: lint_error.message.to_owned(),
                 ..Diagnostic::default()
@@ -519,14 +579,13 @@ impl Document {
                 .iter()
                 .find(|c| c.index == ident_capt_idx)
                 .unwrap();
-            let text_range = ident_capture.node.range();
-            let text = &str[text_range.start_byte..text_range.end_byte];
+            let text = &str[ident_capture.node.byte_range()];
             let line_num = node_capture.node.start_position().row;
-            let r#type = match node_capture.node.kind() {
-                "sub_declaration" => Some(Type::Sub),
-                "acl_declaration" => Some(Type::Acl),
-                "backend_declaration" => Some(Type::Backend),
-                "probe_declaration" => Some(Type::Probe),
+            let r#type: Box<Type> = match node_capture.node.kind() {
+                "sub_declaration" => Box::new(Type::Sub),
+                "acl_declaration" => Box::new(Type::Acl),
+                "backend_declaration" => Box::new(Type::Backend),
+                "probe_declaration" => Box::new(Type::Probe),
                 "new_stmt" => {
                     let def_ident_capture = each_match
                         .captures
@@ -550,29 +609,61 @@ impl Document {
                         }
                     }
 
-                    defs.push(Definition {
-                        ident_str: text.to_string(),
-                        line_num,
-                        doc_url: self.url.as_ref().and_then(|url| Some(url.to_string())),
-                        r#type: r#type_box,
-                    });
-
-                    continue;
+                    r#type_box
                 }
-                _ => None,
+                _ => continue,
             };
 
-            if r#type.is_some() {
-                defs.push(Definition {
-                    ident_str: text.to_string(),
-                    line_num,
-                    doc_url: self.url.as_ref().and_then(|url| Some(url.to_string())),
-                    r#type: Box::new(r#type.unwrap()),
-                });
-            }
+            defs.push(Definition {
+                ident_str: text.to_string(),
+                line_num,
+                doc_url: Some(self.url.to_string()),
+                r#type,
+            });
         }
 
         defs
+    }
+
+    pub fn get_references_for_ident(&self, ident: &str) -> Vec<Reference> {
+        let q = Query::new(
+            self.ast.language(),
+            &format!(r#"((ident) @ident (#eq? @ident "{}"))"#, ident),
+        );
+        if let Err(err) = q {
+            debug!("Error: {}", err);
+            return vec![];
+        }
+        let q = q.unwrap();
+
+        let mut qc = QueryCursor::new();
+        let str = self.rope.to_string();
+        let str_bytes = str.as_bytes();
+        let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
+        let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
+        let mut refs: Vec<Reference> = Vec::new();
+        for each_match in all_matches {
+            let ident_capture = each_match
+                .captures
+                .iter()
+                .find(|c| c.index == ident_capt_idx)
+                .unwrap();
+            let text = &str[ident_capture.node.byte_range()];
+            let line_num = ident_capture.node.start_position().row;
+            refs.push(Reference {
+                ident_str: text.to_string(),
+                line_num,
+                doc_url: Some(self.url.to_string()),
+                uri: Location {
+                    uri: self.url.to_owned(),
+                    range: Range {
+                        start: point_to_position(ident_capture.node.start_position()),
+                        end: point_to_position(ident_capture.node.end_position()),
+                    },
+                },
+            });
+        }
+        refs
     }
 
     /**
@@ -793,6 +884,7 @@ impl Document {
     }
 }
 
+/*
 fn position_to_offset(rope: &Rope, pos: Position) -> usize {
     let line_offset = rope.offset_of_line(pos.line as usize);
     let line_slice = rope.slice(line_offset..);
@@ -805,6 +897,7 @@ fn offset_to_point(rope: &Rope, offset: usize) -> Point {
     let column = offset - rope.offset_of_line(row);
     Point { row, column }
 }
+*/
 
 /*
 fn offset_to_position(rope: &Rope, offset: usize) -> Position {
@@ -814,6 +907,7 @@ fn offset_to_position(rope: &Rope, offset: usize) -> Position {
 }
 */
 
+/*
 fn get_chunk(rope: &Rope, offset: usize) -> &str {
     let cursor = xi_rope::Cursor::new(&rope, offset);
     if let Some((node, idx)) = cursor.get_leaf() {
@@ -822,6 +916,7 @@ fn get_chunk(rope: &Rope, offset: usize) -> &str {
         ""
     }
 }
+*/
 
 fn lookup_from_scope<'a>(global_scope: &'a Type, idents: Vec<&'a str>) -> Option<&'a Type> {
     let mut scope = global_scope;
@@ -838,8 +933,16 @@ fn lookup_from_scope<'a>(global_scope: &'a Type, idents: Vec<&'a str>) -> Option
 
     return Some(scope);
 }
+
 fn lookup_from_scope_by_str<'a>(global_scope: &'a Type, idents: &'a str) -> Option<&'a Type> {
     return lookup_from_scope(global_scope, idents.split('.').collect());
+}
+
+fn point_to_position(point: Point) -> Position {
+    Position {
+        line: point.row as u32,
+        character: point.column as u32,
+    }
 }
 
 #[cfg(test)]
@@ -854,6 +957,7 @@ mod tests {
     #[test]
     fn autocomplete_expands_h_to_http() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 sub vcl_recv {
     set req.h
@@ -878,6 +982,7 @@ sub vcl_recv {
     #[test]
     fn autocomplete_lists_all_on_req() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 sub vcl_recv {
     set req.
@@ -900,6 +1005,7 @@ sub vcl_recv {
     #[test]
     fn get_all_vmod_imports() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 import brotli;
 import jwt;
@@ -918,6 +1024,7 @@ import xkey;
     #[test]
     fn get_all_subroutines() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 sub vcl_init {}
 sub vcl_recv {}
@@ -936,6 +1043,7 @@ sub my_custom_sub {}
     #[test]
     fn get_definition_for_sub() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 sub my_custom_sub {}
 sub vcl_recv {
@@ -956,6 +1064,7 @@ sub vcl_recv {
     #[test]
     fn get_all_definitions_works() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 acl my_ips {}
 sub my_custom_sub {}
@@ -970,6 +1079,7 @@ sub vcl_recv {}
     #[test]
     fn nested_identifier_before_if_works() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 acl a_not_this {}
 backend a_match_this {}
@@ -1006,6 +1116,7 @@ sub vcl_recv {
         }
 
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 backend localhost {}
 sub vcl_recv {
@@ -1042,6 +1153,7 @@ sub vcl_recv {
     #[test]
     fn autocomplete_backend_def_properties() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 backend localhost {
     .po
@@ -1065,6 +1177,7 @@ backend localhost {
     #[test]
     fn lists_all_includes() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 include "config/acl.vcl";
 sub vcl_recv {
@@ -1083,6 +1196,7 @@ sub vcl_recv {
     #[test]
     fn list_all_new_objs() {
         let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
             r#"
 sub vcl_init {
     new static_web = directors.round_robin();

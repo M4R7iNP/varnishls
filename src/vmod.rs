@@ -21,7 +21,6 @@ struct VmodDataCStruct {
     abi: *const c_char,
 }
 
-#[repr(C)]
 #[derive(Debug)]
 pub struct VmodData {
     pub vrt_major: usize,
@@ -36,24 +35,21 @@ pub struct VmodData {
     pub scope: Type,
 }
 
-#[derive(Debug)]
-pub struct VmodFuncArg {
-    pub name: String,
-    pub input_type: String,
-}
+fn parse_vmod_func_signature(serde_value_arr: &Vec<SerdeValue>) -> String {
+    format!(
+        "({})",
+        serde_value_arr
+            .iter()
+            .filter_map(|arg| -> Option<_> {
+                let arg_arr = arg.as_array()?;
+                let input_type = arg_arr.get(0)?.as_str()?.to_string();
+                let name = arg_arr.get(1)?.as_str()?.to_string();
 
-#[derive(Debug)]
-pub struct VmodFunc {
-    pub name: String,
-    pub args: Vec<VmodFuncArg>,
-    pub ret_type: String,
-}
-
-#[derive(Debug)]
-pub struct VmodJsonData {
-    pub vmod_version: String,
-    pub events: Vec<String>,
-    pub funcs: Vec<VmodFunc>,
+                Some(format!("{} {}", input_type, name))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<dyn Error>> {
@@ -86,34 +82,7 @@ fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<d
         .map(|result| result.unwrap())
         .collect();
 
-    let signature = format!(
-        "({})",
-        signature_arr[3..]
-            .iter()
-            .map(|arg| -> Result<String, Box<dyn Error>> {
-                let arg_arr = arg.as_array().ok_or("Arg signature is not array")?;
-
-                let input_type = arg_arr
-                    .get(0)
-                    .ok_or("Missing VMOD method arg type")?
-                    .as_str()
-                    .ok_or("VMOD method arg type should be string")?
-                    .to_string();
-                let name = arg_arr
-                    .get(1)
-                    .ok_or("Missing VMOD method arg name")?
-                    .as_str()
-                    .ok_or("VMOD method arg name should be string")?
-                    .to_string();
-
-                Ok(format!("{} {}", input_type, name))
-            })
-            .filter(|result| result.is_ok())
-            .map(|result| result.unwrap())
-            .collect::<Vec<String>>()
-            .join(", ")
-    );
-
+    let signature = parse_vmod_func_signature(&signature_arr[3..].to_vec());
     let ret_type = ret_types.get(0).ok_or("Missing return type")?.as_str();
     let r#return: Option<Box<Type>> = match ret_type {
         "BACKEND" => Some(Box::new(Type::Backend)),
@@ -134,29 +103,56 @@ fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<d
     })
 }
 
+fn parse_vmod_json_obj(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<dyn Error>> {
+    let name = serde_value_arr
+        .get(1)
+        .ok_or("Failed to get obj name")?
+        .as_str()
+        .ok_or("Obj name is not string")?
+        .to_string();
+
+    let mut obj = Obj {
+        name: name.clone(),
+        read_only: true,
+        ..Default::default()
+    };
+
+    for method_serde_val in serde_value_arr[6..].iter() {
+        let method_arr = method_serde_val.as_array().ok_or("Method is not array")?;
+        let func = parse_vmod_json_func(method_arr)?;
+        obj.properties.insert(func.name.clone(), Type::Func(func));
+    }
+
+    let mut func = Func {
+        name: name.clone(),
+        ret_type: Some(name),
+        r#return: Some(Box::new(Type::Obj(obj))),
+        ..Default::default()
+    };
+
+    if let Some(SerdeValue::Array(ref vmod_init_def)) = serde_value_arr.get(4) {
+        if let Some(SerdeValue::Array(ref array_containing_signature)) = vmod_init_def.get(1) {
+            if let Some(ref signature_items) = array_containing_signature.get(4..) {
+                func.signature = Some(parse_vmod_func_signature(&signature_items.to_vec()));
+            }
+        }
+    }
+
+    return Ok(func);
+}
+
 pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
     let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(&json)?;
-    // println!("json test: {:?}", json_parsed);
-    /*
-    let mut vmod_json_data = VmodJsonData {
-        vmod_version: String::new(),
-        events: Vec::new(),
-        funcs: Vec::new(),
-    };
-    */
-
     let mut vmod_obj = Obj {
         read_only: true,
         ..Default::default()
     };
 
     for row in json_parsed.iter() {
-        let row_type = row.get(0).ok_or("empty array")?.as_str();
-        if row_type.is_none() {
-            continue;
-        }
-
-        let row_type = row_type.unwrap();
+        let row_type = match row.get(0) {
+            Some(SerdeValue::String(str)) => str.as_str(),
+            _ => continue,
+        };
 
         match row_type {
             "$VMOD" => {
@@ -182,41 +178,18 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
                 */
             }
             "$FUNC" => {
-                let func = parse_vmod_json_func(&row)?;
-                // vmod_json_data.funcs.push(func);
-                vmod_obj
-                    .properties
-                    .insert(func.name.clone(), Type::Func(func));
+                if let Ok(func) = parse_vmod_json_func(&row) {
+                    vmod_obj
+                        .properties
+                        .insert(func.name.clone(), Type::Func(func));
+                }
             }
             "$OBJ" => {
-                let name = row
-                    .get(1)
-                    .ok_or("Failed to get obj name")?
-                    .as_str()
-                    .ok_or("Obj name is not string")?
-                    .to_string();
-
-                let mut obj = Obj {
-                    name: name.clone(),
-                    read_only: true,
-                    ..Default::default()
-                };
-
-                for method_serde_val in row[6..].iter() {
-                    let method_arr = method_serde_val.as_array().ok_or("Method is not array")?;
-                    let func = parse_vmod_json_func(method_arr)?;
-                    obj.properties.insert(func.name.clone(), Type::Func(func));
+                if let Ok(func) = parse_vmod_json_obj(&row) {
+                    vmod_obj
+                        .properties
+                        .insert(func.name.clone(), Type::Func(func));
                 }
-
-                let func = Func {
-                    name: name.clone(),
-                    signature: None,
-                    ret_type: Some(name.clone()),
-                    definition: None,
-                    r#return: Some(Box::new(Type::Obj(obj))),
-                };
-
-                vmod_obj.properties.insert(name, Type::Func(func));
             }
             _ => {}
         }
