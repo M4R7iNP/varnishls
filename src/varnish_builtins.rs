@@ -17,11 +17,13 @@ pub enum Type {
     Sub,
     Probe,
     // UnresolvedNew, // hack
+    Enum(Vec<String>),
+    Blob,
 }
 
 impl Type {
     pub fn is_same_type_as(&self, other: &Self) -> bool {
-        return discriminant(self) == discriminant(other);
+        discriminant(self) == discriminant(other)
     }
 
     pub fn can_this_cast_into(&self, other: &Self) -> bool {
@@ -34,7 +36,7 @@ impl Type {
             },
             _ => {}
         }
-        return discriminant(self) == discriminant(other);
+        discriminant(self) == discriminant(other)
     }
 }
 
@@ -60,6 +62,8 @@ impl std::fmt::Display for Type {
             Type::Acl => write!(f, "ACL"),
             Type::Sub => write!(f, "SUBROUTINE"),
             Type::Probe => write!(f, "PROBE"),
+            Type::Enum(values) => write!(f, "ENUM [{}]", values.join(", ")),
+            Type::Blob => write!(f, "BLOB"),
         }
     }
 }
@@ -72,16 +76,26 @@ pub struct Obj {
     pub definition: Option<Definition>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FuncArg {
+    pub name: String,
+    pub optional: bool,
+    pub r#type: Type,
+    pub default_value: Option<String>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Func {
     pub name: String,
     pub definition: Option<Definition>,
     pub signature: Option<String>,   // arguments
     pub ret_type: Option<String>,    // TEMP
-    pub r#return: Option<Box<Type>>, // TEMP
+    pub r#return: Option<Box<Type>>,
+    pub doc: Option<String>,
+    pub arguments: Vec<FuncArg>,
 }
 
-const DEFAULT_REQUEST_HEADERS: &'static [&str] = &[
+const DEFAULT_REQUEST_HEADERS: &[&str] = &[
     "host",
     "origin",
     "cookie",
@@ -93,7 +107,7 @@ const DEFAULT_REQUEST_HEADERS: &'static [&str] = &[
     "authorization",
 ];
 
-const DEFAULT_RESPONSE_HEADERS: &'static [&str] = &[
+const DEFAULT_RESPONSE_HEADERS: &[&str] = &[
     "vary",
     "origin",
     "server",
@@ -109,7 +123,7 @@ const DEFAULT_RESPONSE_HEADERS: &'static [&str] = &[
 ];
 
 // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L121-L130
-pub const PROBE_FIELDS: &'static [&str] = &[
+pub const PROBE_FIELDS: &[&str] = &[
     "url",
     "request",
     "expected_response",
@@ -121,7 +135,7 @@ pub const PROBE_FIELDS: &'static [&str] = &[
 ];
 
 // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L311-L322
-pub const BACKEND_FIELDS: &'static [&str] = &[
+pub const BACKEND_FIELDS: &[&str] = &[
     "host",
     "port",
     "path",
@@ -134,6 +148,10 @@ pub const BACKEND_FIELDS: &'static [&str] = &[
     "proxy_header",
 ];
 
+pub const RETURN_METHODS: &[&str] = &[
+    "hit", "miss", "pass", "pipe", "retry", "restart", "fail", "synth", "hash", "deliver",
+    "abandon", "lookup", "error", "purge",
+];
 pub fn get_varnish_builtins() -> Type {
     let req: Type = Type::Obj(Obj {
         name: "req".to_string(),
@@ -326,33 +344,40 @@ pub fn get_varnish_builtins() -> Type {
         ..Obj::default()
     });
 
-    return global_scope;
+    global_scope
 }
 
 /*
  * Check if provided `scope` contains provided type (`type_to_compare`). can_this_turn_into means
  * checking whether anything in `scope` can turn (cast) into `type_to_compare`.
  */
-pub fn scope_contains(scope: &Type, type_to_compare: &Type, can_this_turn_into: bool) -> bool {
+pub fn scope_contains_type(scope: &Type, type_to_compare: &Type, can_this_turn_into: bool) -> bool {
     if can_this_turn_into {
         if scope.can_this_cast_into(type_to_compare) {
             return true;
         }
-    } else {
-        if scope.is_same_type_as(type_to_compare) {
-            return true;
-        }
+    } else if scope.is_same_type_as(type_to_compare) {
+        return true;
     }
 
     match scope {
         Type::Obj(obj) => obj
             .properties
             .values()
-            .any(|prop| scope_contains(prop, type_to_compare, can_this_turn_into)),
+            .any(|prop| scope_contains_type(prop, type_to_compare, can_this_turn_into)),
         Type::Func(func) => match func.r#return {
-            Some(ref ret_type) => scope_contains(ret_type, type_to_compare, can_this_turn_into),
+            Some(ref ret_type) => {
+                scope_contains_type(ret_type, type_to_compare, can_this_turn_into)
+            }
             _ => false,
         },
+        _ => false,
+    }
+}
+
+pub fn scope_contains_writable(scope: &Type) -> bool {
+    match scope {
+        Type::Obj(obj) => !obj.read_only || obj.properties.values().any(scope_contains_writable),
         _ => false,
     }
 }

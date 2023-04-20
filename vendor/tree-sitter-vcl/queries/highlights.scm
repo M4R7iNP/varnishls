@@ -60,13 +60,13 @@
 (ident_call_expr
   ident: (nested_ident) @function.call)
 (ident_call_expr
-  ident: (nested_ident) @name (#any-of? @name "regsub" "regsuball" "hash_data" "synthetic" "ban")) @function.builtin
+  ident: (nested_ident) @function.builtin (#any-of? @function.builtin "regsub" "regsuball" "hash_data" "synthetic" "ban"))
 
 (ident) @variable
 (nested_ident) @variable
 [
-  ((nested_ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess)"))
-  ((ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess)"))
+  ((nested_ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)"))
+  ((ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)"))
 ] @variable.builtin
 (enum_ident) @constant
 

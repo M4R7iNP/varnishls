@@ -52,6 +52,12 @@ enum Command {
         #[clap(long = "json")]
         json: bool,
     },
+
+    InspectVcc {
+        /// Files to lint
+        path: PathBuf,
+    },
+
 }
 
 #[tokio::main]
@@ -73,13 +79,13 @@ async fn main() -> ExitCode {
             let stdin = tokio::io::stdin();
             let stdout = tokio::io::stdout();
 
-            let (service, socket) = LspService::build(|client| Backend::new(client)).finish();
+            let (service, socket) = LspService::build(Backend::new).finish();
             Server::new(stdin, stdout, socket).serve(service).await;
         }
         Command::Lint { files, level } => {
             let mut results = Vec::new();
 
-            if files.len() == 0 {
+            if files.is_empty() {
                 panic!("No files supplied");
             }
 
@@ -108,15 +114,12 @@ async fn main() -> ExitCode {
                 let line = lint_error.loc.range.start.line;
                 println!(
                     "[{:?}] [{} at line {}]: {}",
-                    lint_error.severity,
-                    lint_error.loc.uri.to_string(),
-                    line,
-                    lint_error.message
+                    lint_error.severity, lint_error.loc.uri, line, lint_error.message
                 );
             }
             println!("Took: {}", now.elapsed().as_millis());
 
-            if results.len() > 0 {
+            if !results.is_empty() {
                 return ExitCode::from(1);
             }
         }
@@ -139,6 +142,14 @@ async fn main() -> ExitCode {
             } else {
                 println!("VMOD: {:?}", vmod);
             }
+        }
+        Command::InspectVcc { path } => {
+            let src = fs::read_to_string(&path)
+                .await
+                .expect("Could not read VCC");
+
+            let scope = varnishls::vcc::parse_vcc(src);
+            println!("scope: {:?}", scope);
         }
     }
 
