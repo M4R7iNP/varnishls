@@ -30,9 +30,7 @@ lsp_configs.varnishls = {
     -- Change the path to varnishls (add --debug for debug log)
     cmd = { "/home/martin/varnishls/target/debug/varnishls", "lsp", "--stdio" },
     filetypes = { "vcl" },
-    root_dir = function(fname)
-      return lspconfig.util.root_pattern(".varnishls.toml")(fname) or lspconfig.util.find_git_ancestor(fname) or vim.fn.getcwd()
-    end,
+    root_dir = lspconfig.util.root_pattern(".varnishls.toml", ".git"),
     settings = {},
   }
 }

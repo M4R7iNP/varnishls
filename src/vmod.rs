@@ -35,7 +35,7 @@ pub struct VmodData {
     pub scope: Type,
 }
 
-fn parse_vmod_func_signature(serde_value_arr: &Vec<SerdeValue>) -> String {
+fn parse_vmod_func_signature(serde_value_arr: &[SerdeValue]) -> String {
     format!(
         "({})",
         serde_value_arr
@@ -52,7 +52,7 @@ fn parse_vmod_func_signature(serde_value_arr: &Vec<SerdeValue>) -> String {
     )
 }
 
-fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<dyn Error>> {
+fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn Error>> {
     let name = serde_value_arr
         .get(1)
         .ok_or("Missing VMOD func name")?
@@ -78,11 +78,10 @@ fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<d
                 .ok_or("Return type is not string")?
                 .to_string())
         })
-        .filter(|result| result.is_ok())
-        .map(|result| result.unwrap())
+        .filter_map(|result| result.ok())
         .collect();
 
-    let signature = parse_vmod_func_signature(&signature_arr[3..].to_vec());
+    let signature = parse_vmod_func_signature(&signature_arr[3..]);
     let ret_type = ret_types.get(0).ok_or("Missing return type")?.as_str();
     let r#return: Option<Box<Type>> = match ret_type {
         "BACKEND" => Some(Box::new(Type::Backend)),
@@ -103,7 +102,7 @@ fn parse_vmod_json_func(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<d
     })
 }
 
-fn parse_vmod_json_obj(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<dyn Error>> {
+fn parse_vmod_json_obj(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn Error>> {
     let name = serde_value_arr
         .get(1)
         .ok_or("Failed to get obj name")?
@@ -132,17 +131,17 @@ fn parse_vmod_json_obj(serde_value_arr: &Vec<SerdeValue>) -> Result<Func, Box<dy
 
     if let Some(SerdeValue::Array(ref vmod_init_def)) = serde_value_arr.get(4) {
         if let Some(SerdeValue::Array(ref array_containing_signature)) = vmod_init_def.get(1) {
-            if let Some(ref signature_items) = array_containing_signature.get(4..) {
-                func.signature = Some(parse_vmod_func_signature(&signature_items.to_vec()));
+            if let Some(signature_items) = array_containing_signature.get(4..) {
+                func.signature = Some(parse_vmod_func_signature(signature_items));
             }
         }
     }
 
-    return Ok(func);
+    Ok(func)
 }
 
 pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
-    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(&json)?;
+    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json)?;
     let mut vmod_obj = Obj {
         read_only: true,
         ..Default::default()
@@ -178,14 +177,14 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
                 */
             }
             "$FUNC" => {
-                if let Ok(func) = parse_vmod_json_func(&row) {
+                if let Ok(func) = parse_vmod_json_func(row) {
                     vmod_obj
                         .properties
                         .insert(func.name.clone(), Type::Func(func));
                 }
             }
             "$OBJ" => {
-                if let Ok(func) = parse_vmod_json_obj(&row) {
+                if let Ok(func) = parse_vmod_json_obj(row) {
                     vmod_obj
                         .properties
                         .insert(func.name.clone(), Type::Func(func));
@@ -195,7 +194,7 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
         }
     }
 
-    return Ok(Type::Obj(vmod_obj));
+    Ok(Type::Obj(vmod_obj))
 }
 
 pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData, Box<dyn Error>> {
@@ -210,8 +209,8 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
         .find(|sym| {
             elf.dynstrtab
                 .get_at(sym.st_name)
-                .and_then(|sym_name| Some(sym_name == vmod_data_symbol_name))
-                .unwrap_or_else(|| false)
+                .map(|sym_name| sym_name == vmod_data_symbol_name)
+                .unwrap_or(false)
         })
         .ok_or("Could not find vmod data symbol")?;
 
@@ -254,7 +253,7 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
     });
 }
 
-const DEFAULT_SEARCH_PATHS: &'static [&str] = &[
+const DEFAULT_SEARCH_PATHS: &[&str] = &[
     // ubuntu, debian
     "/usr/lib/x86_64-linux-gnu/varnish/vmods/",
     // fedora, centos
@@ -270,11 +269,8 @@ pub async fn read_vmod_lib_by_name(
     search_paths: Vec<PathBuf>,
 ) -> Result<Option<VmodData>, Box<dyn Error + Send + Sync>> {
     let mut search_paths = search_paths;
-    if search_paths.len() == 0 {
-        search_paths = DEFAULT_SEARCH_PATHS
-            .iter()
-            .map(|str| PathBuf::from(str))
-            .collect();
+    if search_paths.is_empty() {
+        search_paths = DEFAULT_SEARCH_PATHS.iter().map(PathBuf::from).collect();
     }
 
     let file_name = format!("libvmod_{}.so", name);
@@ -288,5 +284,5 @@ pub async fn read_vmod_lib_by_name(
         }
     }
 
-    return Ok(None);
+    Ok(None)
 }

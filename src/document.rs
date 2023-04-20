@@ -1,6 +1,8 @@
 use crate::{
-    parser,
-    varnish_builtins::{scope_contains, Func, Type, BACKEND_FIELDS, PROBE_FIELDS},
+    parser, static_autocomplete_items,
+    varnish_builtins::{
+        self, scope_contains_type, scope_contains_writable, Type, BACKEND_FIELDS, PROBE_FIELDS,
+    },
 };
 
 use log::debug;
@@ -52,7 +54,7 @@ pub struct LintError {
 }
 
 // reserved keywords, without top-level only declarations
-const RESERVED_KEYWORDS: &'static [&str] = &[
+const RESERVED_KEYWORDS: &[&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
 ];
 
@@ -66,7 +68,7 @@ pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
         return "".into();
     }
 
-    return text;
+    text
 }
 
 unsafe impl Send for Document {}
@@ -136,8 +138,8 @@ impl Document {
             .rope
             .line(range.end.line as usize)
             .utf16_cu_to_char(range.end.character as usize);
-        let start = self.rope.line_to_char(range.start.line as usize) + start_col as usize;
-        let end = self.rope.line_to_char(range.end.line as usize) + end_col as usize;
+        let start = self.rope.line_to_char(range.start.line as usize) + start_col;
+        let end = self.rope.line_to_char(range.end.line as usize) + end_col;
         let old_end_byte = self.rope.char_to_byte(end);
         self.rope.remove(start..end);
         self.rope.insert(start, text.as_str());
@@ -193,7 +195,7 @@ impl Document {
             .root_node()
             .descendant_for_point_range(point, point)?;
         let name = get_node_text(&self.rope, &node);
-        return Some(name.to_string());
+        Some(name)
     }
 
     pub fn get_definition_by_name(&self, name: &String) -> Option<(Point, Point)> {
@@ -221,7 +223,7 @@ impl Document {
         let capt_idx = q.capture_index_for_name("node").unwrap();
 
         for each_match in all_matches {
-            for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
+            if let Some(capture) = each_match.captures.iter().find(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 let line = range.start_point.row;
                 let col = range.start_point.column;
@@ -235,12 +237,12 @@ impl Document {
             }
         }
 
-        return None;
+        None
     }
 
     pub fn get_definition_by_point(&self, point: Point) -> Option<(Point, Point)> {
         let name = self.get_ident_at_point(point)?;
-        return self.get_definition_by_name(&name);
+        self.get_definition_by_name(&name)
     }
 
     pub fn get_error_ranges(&self) -> Vec<LintError> {
@@ -275,7 +277,10 @@ impl Document {
             if node.is_error() {
                 error_ranges.push(LintError {
                     message: "Syntax error".to_string(),
-                    loc: Location { uri: self.url.to_owned(), range },
+                    loc: Location {
+                        uri: self.url.to_owned(),
+                        range,
+                    },
                     severity: DiagnosticSeverity::ERROR,
                 });
                 recurse = false;
@@ -285,7 +290,10 @@ impl Document {
             if node.is_missing() {
                 error_ranges.push(LintError {
                     message: format!("Expected {}", node.kind()),
-                    loc: Location { uri: self.url.to_owned(), range },
+                    loc: Location {
+                        uri: self.url.to_owned(),
+                        range,
+                    },
                     severity: DiagnosticSeverity::ERROR,
                 });
                 recurse = false;
@@ -298,7 +306,10 @@ impl Document {
                     if left.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing set property".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -308,7 +319,10 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing set value".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -319,7 +333,10 @@ impl Document {
                     if left.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing identifier".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -329,7 +346,10 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing value".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -341,7 +361,10 @@ impl Document {
                         None => {
                             error_ranges.push(LintError {
                                 message: "Missing backend property field".to_string(),
-                                loc: Location { uri: self.url.to_owned(), range },
+                                loc: Location {
+                                    uri: self.url.to_owned(),
+                                    range,
+                                },
                                 severity: DiagnosticSeverity::ERROR,
                             });
                             continue;
@@ -357,7 +380,10 @@ impl Document {
                             if !fields.iter().any(|field| field == &text) {
                                 error_ranges.push(LintError {
                                     message: format!("Backend property «{}» does not exist", text),
-                                    loc: Location { uri: self.url.to_owned(), range },
+                                    loc: Location {
+                                        uri: self.url.to_owned(),
+                                        range,
+                                    },
                                     severity: DiagnosticSeverity::ERROR,
                                 });
                             }
@@ -368,7 +394,10 @@ impl Document {
                     if right.is_none() {
                         error_ranges.push(LintError {
                             message: "Missing backend property value".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -379,7 +408,10 @@ impl Document {
                     if RESERVED_KEYWORDS.contains(&text) {
                         error_ranges.push(LintError {
                             message: "Reserved keyword".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
@@ -387,7 +419,10 @@ impl Document {
                     if text.ends_with('.') {
                         error_ranges.push(LintError {
                             message: "Identifier ending with dot?".to_string(),
-                            loc: Location { uri: self.url.to_owned(), range },
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
                             severity: DiagnosticSeverity::WARNING,
                         });
                         continue;
@@ -416,31 +451,33 @@ impl Document {
                             let parts = text.split('.').collect::<Vec<&str>>();
                             if sub_name.starts_with("vcl_") {
                                 let exists_in_sub = match parts[0] {
-                                    "req" => match sub_name {
-                                        "vcl_recv" | "vcl_deliver" | "vcl_synth" | "vcl_miss"
-                                        | "vcl_hit" | "vcl_pass" | "vcl_purge" | "vcl_pipe"
-                                        | "vcl_hash" => true,
-                                        _ => false,
-                                    },
-                                    "bereq" => match sub_name {
+                                    "req" => matches!(
+                                        sub_name,
+                                        "vcl_recv"
+                                            | "vcl_deliver"
+                                            | "vcl_synth"
+                                            | "vcl_miss"
+                                            | "vcl_hit"
+                                            | "vcl_pass"
+                                            | "vcl_purge"
+                                            | "vcl_pipe"
+                                            | "vcl_hash"
+                                    ),
+                                    "bereq" => matches!(
+                                        sub_name,
                                         "vcl_backend_fetch"
-                                        | "vcl_backend_response"
-                                        | "vcl_pipe"
-                                        | "vcl_backend_error" => true,
-                                        _ => false,
-                                    },
-                                    "beresp" => match sub_name {
-                                        "vcl_backend_response" | "vcl_backend_error" => true,
-                                        _ => false,
-                                    },
-                                    "resp" => match sub_name {
-                                        "vcl_deliver" | "vcl_miss" | "vcl_synth" => true,
-                                        _ => false,
-                                    },
-                                    "obj" => match sub_name {
-                                        "vcl_hit" | "vcl_deliver" => true,
-                                        _ => false,
-                                    },
+                                            | "vcl_backend_response"
+                                            | "vcl_pipe"
+                                            | "vcl_backend_error"
+                                    ),
+                                    "beresp" => matches!(
+                                        sub_name,
+                                        "vcl_backend_response" | "vcl_backend_error"
+                                    ),
+                                    "resp" => {
+                                        matches!(sub_name, "vcl_deliver" | "vcl_miss" | "vcl_synth")
+                                    }
+                                    "obj" => matches!(sub_name, "vcl_hit" | "vcl_deliver"),
                                     _ => true,
                                 };
 
@@ -450,7 +487,10 @@ impl Document {
                                             "«{}» does not exist in «{}»",
                                             parts[0], sub_name
                                         ),
-                                        loc: Location { uri: self.url.to_owned(), range },
+                                        loc: Location {
+                                            uri: self.url.to_owned(),
+                                            range,
+                                        },
                                         severity: DiagnosticSeverity::ERROR,
                                     });
                                 }
@@ -462,7 +502,7 @@ impl Document {
             }
         }
 
-        return error_ranges;
+        error_ranges
     }
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
@@ -541,7 +581,7 @@ impl Document {
         import_names
     }
 
-    pub fn get_all_definitions<'a>(&self, scope_with_vmods: &'a Type) -> Vec<Definition> {
+    pub fn get_all_definitions(&self, scope_with_vmods: &Type) -> Vec<Definition> {
         let q = Query::new(
             self.ast.language(),
             // "[(toplev_declaration (_ (ident) @ident ) @node), (new_stmt (ident) @ident) @node]",
@@ -669,34 +709,48 @@ impl Document {
     /**
      * Expand identifiers into req, res etc. and their properties.
      */
-    pub fn autocomplete_for_pos(
+    pub fn autocomplete_for_pos_bak(
         &self,
         pos: Position,
         global_scope: Type,
     ) -> Option<Vec<CompletionItem>> {
         debug!("starting autocomplete");
-        let ast = self.ast.clone();
-        let target_point = Point {
+        let mut target_point = Point {
             row: pos.line as usize,
             column: pos.character as usize,
         };
 
         // let mut ctx_node: Option<Node> = None;
-        let mut cursor = ast.walk();
+        let mut cursor = self.ast.walk();
         let mut node: Node;
         let mut text = "".to_string();
         let full_text = self.rope.to_string();
         // let mut ctx_text: Option<&str> = None;
         let mut search_type: Option<&Type> = None;
-        let mut ignore_type: Option<Type> = None;
+        let mut must_be_writable = false;
         let mut last_loop = false;
+        debug!("target point: {}", target_point);
+        let target_row = self.rope.line(target_point.row);
+        debug!("target line: ({})", target_row);
+        if matches!(target_row.get_char(target_point.column), None | Some('\n'))
+            && target_point.column > 0
+        {
+            debug!("decrementing by one");
+            target_point.column -= 1;
+        }
+
+        if target_point.column >= target_row.len_chars() {
+            debug!("beyond line");
+        } else if target_row.char(target_point.column) == '\n' {
+            debug!("at line break");
+        }
         while !last_loop {
             let idx_opt = cursor.goto_first_child_for_point(target_point);
             node = cursor.node();
             debug!("visiting node {:?}", node);
 
             // fix when cursor is at ;
-            if node.kind() == ";" {
+            if node.kind() == ";" || node.kind() == "}" {
                 node = node.prev_sibling().unwrap();
                 debug!("fixing ; by going to node {:?}", node);
                 last_loop = true;
@@ -728,28 +782,32 @@ impl Document {
 
                         // When the node under the cursor is «;», select the right field instead
                         if node.kind() == ";" || node.kind() == "=" {
+                            debug!("hmm ; or =");
                             field = Some("right");
                         }
 
                         match field {
-                            Some("left") => {
-                                // ignore functions
-                                ignore_type = Some(Type::Func(Func {
-                                    ..Default::default()
-                                }));
+                            None | Some("left") => {
+                                // autocomplete for left part of set statements must be writeable
+                                must_be_writable = true;
                             }
                             Some("right") => {
+                                debug!("right");
                                 // text = get_node_text(&self.rope, &node);
                                 if let Some(ctx_node) = parent_node.child_by_field_name("left") {
                                     let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                    search_type =
-                                        lookup_from_scope_by_str(&global_scope, &ctx_node_str);
-                                    // ignore objects here
-                                    match search_type {
-                                        Some(Type::Obj(_obj)) => {
+                                    if ["req.http.", "resp.http.", "bereq.http.", "beresp.http."]
+                                        .iter()
+                                        .any(|variable| ctx_node_str.starts_with(variable))
+                                    {
+                                        search_type = Some(&Type::String);
+                                    } else {
+                                        search_type =
+                                            lookup_from_scope_by_str(&global_scope, ctx_node_str);
+                                        // ignore objects here
+                                        if let Some(Type::Obj(_obj)) = search_type {
                                             search_type = None;
                                         }
-                                        _ => {}
                                     }
                                 }
                             }
@@ -761,32 +819,26 @@ impl Document {
                         let mut field = cursor.field_name();
                         if node.kind() == ";" || node.kind() == "=" {
                             field = Some("right");
+                        } else if node.kind() == "." {
+                            debug!("got .");
+                            field = Some("left");
+                            node = node.parent().unwrap();
                         }
 
                         match field {
                             Some("left") => {
                                 text = get_node_text(&self.rope, &node);
+                                let text = text.strip_prefix('.').unwrap_or(text.as_str());
                                 let parent_parent_node_kind = parent_node.parent().unwrap().kind();
-                                let fields = match parent_parent_node_kind {
-                                    "probe_declaration" => PROBE_FIELDS,
-                                    _ => BACKEND_FIELDS,
+                                let r#type = match parent_parent_node_kind {
+                                    "probe_declaration" => Type::Probe,
+                                    _ => Type::Backend,
                                 };
-                                return Some(
-                                    fields
-                                        .iter()
-                                        .filter(|field| field.starts_with(&text))
-                                        .map(|field| CompletionItem {
-                                            label: field.to_string(),
-                                            detail: Some(field.to_string()),
-                                            ..Default::default()
-                                        })
-                                        .collect(),
-                                );
+                                return Some(get_probe_backend_fields(r#type, text));
                             }
                             Some("right") => {
                                 if let Some(ctx_node) = parent_node.child_by_field_name("left") {
                                     let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                    debug!("probe or backend. {:?} {}", ctx_node, ctx_node_str);
                                     if ctx_node_str == "probe" {
                                         search_type = Some(&Type::Probe);
                                     }
@@ -827,14 +879,10 @@ impl Document {
         // text = &full_text[node.start_byte()..node.end_byte()];
         // debug!("text: {:?}", text);
 
-        // identifiers written so far
-        let idents: Vec<&str> = text.split('.').collect(); // split by dot
-                                                           // get scope from identifiers written so far (excluding the last one)
+        // identifiers written so far (split by dot)
+        let idents: Vec<&str> = text.split('.').collect();
+        // get scope from identifiers written so far (excluding the last one)
         let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
-
-        if scope.is_none() {
-            return None;
-        }
 
         // partial match on last identifier written
         let last_part = idents[idents.len() - 1];
@@ -843,27 +891,27 @@ impl Document {
             Type::Obj(obj) => Some(
                 obj.properties
                     .range(last_part.to_string()..)
-                    .take_while(|(key, _v)| key.starts_with(&last_part))
+                    .take_while(|(key, _v)| key.starts_with(last_part))
                     .filter(|(_prop_name, property)| {
                         // debug!("{}: {:?}", _prop_name, property);
                         // try to match only backends when autocompleting for e.g. req.backend_hint
-                        return if let Some(search_type) = search_type {
-                            let has_type = scope_contains(property, search_type, true);
+                        if let Some(search_type) = search_type {
+                            let has_type = scope_contains_type(property, search_type, true);
                             debug!("{} has type {}? {}", _prop_name, search_type, has_type);
                             has_type
-                        } else if let Some(ref ignore_type) = ignore_type {
-                            return !property.is_same_type_as(ignore_type);
+                        } else if must_be_writable {
+                            !obj.read_only || scope_contains_writable(&property)
                         } else {
                             // match on everything
                             true
-                        };
+                        }
                     })
                     .map(|(prop_name, property)| CompletionItem {
                         label: prop_name.to_string(),
                         detail: Some(match property {
                             Type::Func(_func) => format!("{}", property),
                             Type::Backend => format!("BACKEND {}", prop_name),
-                            _ => format!("{} {}", property, prop_name.to_string()),
+                            _ => format!("{} {}", property, prop_name),
                         }),
                         kind: Some(match property {
                             Type::Func(_func) => CompletionItemKind::FUNCTION,
@@ -872,13 +920,268 @@ impl Document {
                             _ => CompletionItemKind::PROPERTY,
                         }),
                         insert_text: Some(match property {
-                            Type::Func(_func) => format!("{}(", prop_name.to_string()),
+                            Type::Func(_func) => format!("{}(", prop_name),
                             _ => prop_name.to_string(),
                         }),
                         ..Default::default()
                     })
                     .collect(),
             ),
+            _ => return None,
+        };
+    }
+
+    /**
+     * Expand identifiers into req, res etc. and their properties.
+     */
+    pub fn autocomplete_for_pos(
+        &self,
+        pos: Position,
+        global_scope: Type,
+    ) -> Option<Vec<CompletionItem>> {
+        debug!("starting autocomplete2");
+
+        let mut target_point = Point {
+            row: pos.line as usize,
+            column: pos.character as usize,
+        };
+
+        let target_row = self.rope.line(target_point.row);
+        if matches!(target_row.get_char(target_point.column), None | Some('\n'))
+            && target_point.column > 0
+        {
+            debug!("decrementing by one");
+            target_point.column -= 1;
+        }
+
+        debug!("target point: {}", target_point);
+
+        let mut text = "".to_string();
+        let full_text = self.rope.to_string();
+        let mut search_type: Option<Type> = None;
+        let mut must_be_writable = false;
+        let mut keyword_suggestions = vec![];
+
+        /*
+        let narrowest_node = self
+            .ast
+            .root_node()
+            .descendant_for_point_range(target_point, target_point)?;
+        */
+        let mut cursor = self.ast.root_node().walk();
+        // walk down, then up again
+        while cursor.goto_first_child_for_point(target_point).is_some() {}
+        loop {
+            let node = cursor.node();
+            debug!("visiting node {:?}", node);
+
+            let parent_node = match node.parent() {
+                Some(node) => node,
+                _ => break,
+            };
+
+            match parent_node.kind() {
+                "set_stmt" => {
+                    let mut field = cursor.field_name();
+
+                    // When the node under the cursor is «;», select the right field instead
+                    if node.kind() == ";" || node.kind() == "=" {
+                        field = Some("right");
+                    }
+
+                    match field {
+                        None | Some("left") => {
+                            // autocomplete for left part of set statements must be writeable
+                            must_be_writable = true;
+                        }
+                        Some("right") => {
+                            // text = get_node_text(&self.rope, &node);
+                            if let Some(ctx_node) = parent_node.child_by_field_name("left") {
+                                let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                if ["req.http.", "resp.http.", "bereq.http.", "beresp.http."]
+                                    .iter()
+                                    .any(|variable| ctx_node_str.starts_with(variable))
+                                {
+                                    search_type = Some(Type::String);
+                                } else {
+                                    search_type =
+                                        lookup_from_scope_by_str(&global_scope, ctx_node_str)
+                                            .map(|t| t.to_owned());
+                                    // ignore objects here
+                                    if let Some(Type::Obj(_obj)) = search_type {
+                                        search_type = None;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "backend_property" | "backend_declaration" | "probe_declaration" => {
+                    let mut field = cursor.field_name();
+                    if node.kind() == ";" || node.kind() == "=" {
+                        field = Some("right");
+                    } else if node.kind() == "." {
+                        field = Some("left");
+                        // node = node.parent().unwrap();
+                    }
+
+                    match field {
+                        Some("left") => {
+                            text = get_node_text(&self.rope, &node);
+                            let text = text.strip_prefix('.').unwrap_or(text.as_str());
+                            let parent_parent_node_kind = parent_node.parent().unwrap().kind();
+                            let r#type = match parent_parent_node_kind {
+                                "probe_declaration" => Type::Probe,
+                                _ => Type::Backend,
+                            };
+                            return Some(get_probe_backend_fields(r#type, text));
+                        }
+                        Some("right") => {
+                            if let Some(ctx_node) = parent_node.child_by_field_name("left") {
+                                let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                if ctx_node_str == "probe" {
+                                    search_type = Some(Type::Probe);
+                                }
+                            }
+                        }
+                        _ => {}
+                    };
+                }
+                "call_stmt" => {
+                    debug!(
+                        "reached call statement ({:?}) ({:?}) ({:?})",
+                        node,
+                        parent_node,
+                        cursor.field_name()
+                    );
+                    search_type = Some(Type::Sub);
+                }
+                "ret_stmt" => {
+                    debug!(
+                        "reached return statement ({:?}) ({:?}) ({:?})",
+                        node,
+                        parent_node,
+                        cursor.field_name()
+                    );
+                    return Some(
+                        varnish_builtins::RETURN_METHODS
+                            .iter()
+                            .map(|field| CompletionItem {
+                                label: field.to_string(),
+                                detail: Some(field.to_string()),
+                                kind: Some(CompletionItemKind::FUNCTION),
+                                ..Default::default()
+                            })
+                            .collect(),
+                    );
+                }
+                "source_file" => {
+                    return Some(static_autocomplete_items::source_file());
+                }
+                "sub_declaration" | "if_stmt" | "elsif_stmt" | "else_stmt" => {
+                    keyword_suggestions.append(&mut static_autocomplete_items::subroutine());
+                }
+                _ => {
+                    if parent_node.kind() == "new_stmt" || node.kind() == "new_stmt" {
+                        debug!("huhh: {:?} ({:?})", node, cursor.field_name());
+                        match cursor.field_name() {
+                            Some("ident") => {
+                                return Some(vec![]);
+                            }
+                            Some("def_right") => {
+                                search_type = Some(Type::Func(crate::varnish_builtins::Func {
+                                    ..Default::default()
+                                }));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            // now, try to gather best identifier for autocomplete
+            match node.kind() {
+                "nested_ident" => {
+                    text = get_node_text(&self.rope, &node);
+                    debug!("got text for nested_ident {:?} {}", node, text);
+                }
+                "ident" if node.parent().unwrap().kind() != "nested_ident" => {
+                    text = get_node_text(&self.rope, &node);
+                    debug!("got text for ident {:?} {}", node, text);
+                }
+                _ => {}
+            }
+
+            let node_range = node.start_position().row..node.end_position().row;
+            if node_range.contains(&target_point.row) {
+                break;
+            }
+
+            if !cursor.goto_parent() {
+                debug!("no parent??");
+                break;
+            }
+        }
+
+        // debug!("jaggu: {:?}", search_type);
+        // let full_text = self.rope.to_string();
+        // text = &full_text[node.start_byte()..node.end_byte()];
+        debug!("text: «{:?}»", text);
+
+        // identifiers written so far (split by dot)
+        let idents: Vec<&str> = text.split('.').collect();
+        // get scope from identifiers written so far (excluding the last one)
+        let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
+
+        // partial match on last identifier written
+        let last_part = idents[idents.len() - 1];
+
+        return match scope.unwrap() {
+            Type::Obj(obj) => {
+                let mut suggestions = obj
+                    .properties
+                    .range(last_part.to_string()..)
+                    .take_while(|(key, _v)| key.starts_with(last_part))
+                    .filter(|(_prop_name, property)| {
+                        // debug!("{}: {:?}", _prop_name, property);
+                        // try to match only backends when autocompleting for e.g. req.backend_hint
+                        if let Some(ref search_type) = search_type {
+                            let has_type = scope_contains_type(property, &search_type, true);
+                            debug!("{} has type {}? {}", _prop_name, search_type, has_type);
+                            has_type
+                        } else if must_be_writable {
+                            !obj.read_only || scope_contains_writable(&property)
+                        } else {
+                            // match on everything
+                            true
+                        }
+                    })
+                    .map(|(prop_name, property)| CompletionItem {
+                        label: prop_name.to_string(),
+                        detail: Some(match property {
+                            Type::Func(_func) => format!("{}", property),
+                            Type::Backend => format!("BACKEND {}", prop_name),
+                            _ => format!("{} {}", property, prop_name),
+                        }),
+                        kind: Some(match property {
+                            Type::Func(_func) => CompletionItemKind::FUNCTION,
+                            Type::Obj(_obj) => CompletionItemKind::STRUCT,
+                            Type::Sub => CompletionItemKind::FUNCTION,
+                            _ => CompletionItemKind::PROPERTY,
+                        }),
+                        insert_text: Some(match property {
+                            Type::Func(_func) => format!("{}(", prop_name),
+                            _ => prop_name.to_string(),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect::<Vec<_>>();
+                if obj.name == "GLOBAL".to_string() {
+                    suggestions.append(&mut keyword_suggestions);
+                }
+                Some(suggestions)
+            }
             _ => return None,
         };
     }
@@ -931,7 +1234,7 @@ fn lookup_from_scope<'a>(global_scope: &'a Type, idents: Vec<&'a str>) -> Option
         }
     }
 
-    return Some(scope);
+    Some(scope)
 }
 
 fn lookup_from_scope_by_str<'a>(global_scope: &'a Type, idents: &'a str) -> Option<&'a Type> {
@@ -945,12 +1248,29 @@ fn point_to_position(point: Point) -> Position {
     }
 }
 
+fn get_probe_backend_fields(r#type: Type, text: &str) -> Vec<CompletionItem> {
+    let fields = match r#type {
+        Type::Probe => PROBE_FIELDS,
+        _ => BACKEND_FIELDS,
+    };
+    fields
+        .iter()
+        .filter(|field| field.starts_with(&text))
+        .map(|field| CompletionItem {
+            label: field.to_string(),
+            detail: Some(field.to_string()),
+            kind: Some(CompletionItemKind::PROPERTY),
+            ..Default::default()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use crate::varnish_builtins::get_varnish_builtins;
-    use crate::varnish_builtins::Obj;
+    use crate::varnish_builtins::{Func, Obj};
 
     use super::*;
 
@@ -999,7 +1319,7 @@ sub vcl_recv {
                 get_varnish_builtins(),
             )
             .unwrap();
-        assert!(result.len() > 0);
+        assert!(!result.is_empty());
     }
 
     #[test]
@@ -1141,13 +1461,9 @@ sub vcl_recv {
         );
         assert_eq!(result.len(), 1);
         */
-        assert!(result.len() > 0);
-        assert!(result
-            .iter()
-            .any(|item| item.label == "localhost".to_string()));
-        assert!(!result
-            .iter()
-            .any(|item| item.label == "localhost_probe".to_string()));
+        assert!(!result.is_empty());
+        assert!(result.iter().any(|item| item.label == *"localhost"));
+        assert!(!result.iter().any(|item| item.label == *"localhost_probe"));
     }
 
     #[test]
@@ -1217,9 +1533,7 @@ sub vcl_init {
                                 name: "mock_round_robin_director".to_string(),
                                 properties: BTreeMap::from([(
                                     "backend".to_string(),
-                                    Type::Func(Func {
-                                        ..Default::default()
-                                    }),
+                                    Type::Func(Default::default()),
                                 )]),
                                 ..Default::default()
                             }))),

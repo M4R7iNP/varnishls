@@ -6,11 +6,11 @@ pub fn parse(src: &str) -> Tree {
     let mut parser = Parser::new();
     let language = tree_sitter_vcl::language();
     parser.set_language(language).unwrap();
-    let ast = parser.parse(&src, None).unwrap();
+    let ast = parser.parse(src, None).unwrap();
     let root_node = ast.root_node();
     println!("{:?}", root_node);
     println!("AST: {:?}", ast);
-    return ast;
+    ast
 }
 
 pub fn vcl() -> Parser {

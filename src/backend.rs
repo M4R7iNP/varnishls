@@ -74,7 +74,7 @@ impl Backend {
             obj.properties.append(&mut temp_map);
         }
 
-        return scope;
+        scope
     }
 
     async fn set_root_uri(&self, uri: Url) {
@@ -97,14 +97,9 @@ impl Backend {
         includes: VecDeque<String>,
     ) -> HashMap<String, Document> {
         let mut new_docs = HashMap::new();
-        let mut includes_to_process = VecDeque::from(includes.clone());
+        let mut includes_to_process = includes.clone();
 
-        loop {
-            let include = match includes_to_process.pop_front() {
-                Some(val) => val,
-                None => break,
-            };
-
+        while let Some(include) = includes_to_process.pop_front() {
             let include_uri = match doc_uri.join(&include) {
                 Ok(uri) => uri,
                 Err(_err) => continue,
@@ -132,11 +127,11 @@ impl Backend {
 
             let file = file.unwrap();
             let included_doc = Document::new(include_uri, file);
-            includes_to_process.append(&mut included_doc.get_includes().into());
+            includes_to_process.append(&mut included_doc.get_includes());
             new_docs.insert(include_file_path_str.clone(), included_doc);
         }
 
-        return new_docs;
+        new_docs
     }
 
     async fn read_doc_from_path(&self, doc_url: &Url) {
@@ -156,7 +151,6 @@ impl Backend {
         let doc = Document::new(doc_url.clone(), file);
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(doc.url.to_string(), doc);
-        return;
     }
 }
 
@@ -180,7 +174,7 @@ impl LanguageServer for Backend {
                 if !root_uri.path().ends_with('/') {
                     let root_path = root_uri.to_file_path().unwrap();
                     if root_path.as_path().is_dir() {
-                        root_uri.set_path(format!("{}/", root_uri.path().to_string()).as_str());
+                        root_uri.set_path(format!("{}/", root_uri.path()).as_str());
                         self.set_root_uri(root_uri.clone()).await;
                     }
                 }
@@ -192,7 +186,7 @@ impl LanguageServer for Backend {
 
                 let config = self.config.read().await;
                 if let Some(ref main_vcl_path) = config.main_vcl {
-                    let main_vcl_url = root_uri.join(&main_vcl_path.to_str().unwrap()).unwrap();
+                    let main_vcl_url = root_uri.join(main_vcl_path.to_str().unwrap()).unwrap();
                     self.read_doc_from_path(&main_vcl_url).await;
                     let doc_map = self.document_map.read().await;
                     let main_doc = doc_map.get(&main_vcl_url.to_string()).unwrap();
@@ -397,10 +391,10 @@ impl LanguageServer for Backend {
         let refs = doc_map
             .values()
             .flat_map(|doc| doc.get_references_for_ident(ident.as_str()))
-            .map(|reference| reference.uri.to_owned())
+            .map(|reference| reference.uri)
             .collect::<Vec<_>>();
 
-        if refs.len() == 0 {
+        if refs.is_empty() {
             return Ok(None);
         }
 
@@ -484,7 +478,7 @@ impl LanguageServer for Backend {
         let completions = || -> Option<Vec<CompletionItem>> {
             let doc = doc_map.get(&uri.to_string())?;
 
-            return doc.autocomplete_for_pos(position, scope);
+            doc.autocomplete_for_pos(position, scope)
         }();
         Ok(completions.map(CompletionResponse::Array))
     }
@@ -559,7 +553,7 @@ impl LanguageServer for Backend {
 }
 
 async fn read_config(root_path: &Path) -> Option<Config> {
-    let config_path_buf = root_path.join(&PathBuf::from(".varnishls.toml"));
+    let config_path_buf = root_path.join(PathBuf::from(".varnishls.toml"));
     let config_path = config_path_buf.as_path();
     if !config_path.exists() {
         return None;
@@ -569,7 +563,7 @@ async fn read_config(root_path: &Path) -> Option<Config> {
         let config = toml::from_str(&config_str);
         return Some(config.unwrap());
     }
-    return None;
+    None
 }
 
 #[derive(Debug, Deserialize, Serialize)]

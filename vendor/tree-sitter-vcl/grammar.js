@@ -10,7 +10,7 @@
 module.exports = grammar({
   name: 'vcl',
 
-  // word: $ => $._word,
+  word: $ => $._word,
   extras: $ => [/\s+/, $.COMMENT, $.inline_c],
   inline: $ => [$.expr, $.inline_c],
 
@@ -38,7 +38,7 @@ module.exports = grammar({
         $.probe_declaration,
         $.import_declaration,
         $.vcl_version_declaration,
-        $.include_declaration,
+        $.include_declaration_with_semi,
       ),
     acl_declaration: $ =>
       seq(
@@ -82,14 +82,18 @@ module.exports = grammar({
         ';',
       ),
     vcl_version_declaration: $ => seq('vcl', $.number, ';'),
-    include_declaration: $ => seq('include', $.string, ';'),
+    include_declaration: $ => seq('include', $.string),
+    include_declaration_with_semi: $ => seq($.include_declaration, ';'),
 
     backend_property: $ =>
       seq(
         '.',
-        field('left', $.ident),
-        optional(seq('=', field('right', optional($.expr)))),
-        ';',
+        optional(
+          seq(
+            field('left', $.ident),
+            optional(seq('=', field('right', optional($.expr)), ';')),
+          ),
+        ),
       ),
     // quirk, probe .request can have a list of strings
     probe_request_string_list: $ =>
@@ -102,16 +106,25 @@ module.exports = grammar({
       ),
     acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
 
-    stmt: $ =>
-      choice(
-        $.if_stmt,
-        $.set_stmt,
-        $.new_stmt,
-        $.unset_stmt,
-        $.call_stmt,
-        $.ident_call_stmt,
-        $.ret_stmt,
-        $.include_declaration,
+    stmt: $ => choice($.if_stmt, $._statements_with_semicolon),
+
+    /*
+     * hack to make statements with semicolon (pretty much everything but
+     * if statements) require semicolon, but not have the statement itself
+     * be an error without semicolon
+     */
+    _statements_with_semicolon: $ =>
+      seq(
+        choice(
+          $.set_stmt,
+          $.new_stmt,
+          $.unset_stmt,
+          $.call_stmt,
+          $.ident_call_stmt,
+          $.include_declaration,
+          $.ret_stmt,
+        ),
+        ';',
       ),
 
     if_stmt: $ =>
@@ -129,17 +142,13 @@ module.exports = grammar({
         field('consequence', seq('{', repeat($.stmt), '}')),
       ),
     else_stmt: $ => seq('else', '{', repeat($.stmt), '}'),
-    call_stmt: $ => seq('call', field('ident', $.ident), ';'), // subroutine call expr (e.g. «call strip_query_params;»)
+    call_stmt: $ => seq('call', field('ident', $.ident)), // subroutine call expr (e.g. «call strip_query_params;»)
     ident_call_expr: $ =>
       prec('call', seq(field('ident', $.nested_ident), $.func_call_args)), // function call expr (e.g. «if (querystring.get("")) {}»)
-    ident_call_stmt: $ => seq($.ident_call_expr, ';'), // function call statement (e.g. «var.global_set("a", "b");» )
+    ident_call_stmt: $ => $.ident_call_expr, // function call statement (e.g. «var.global_set("a", "b");» )
 
     ret_stmt: $ =>
-      seq(
-        'return',
-        optional(seq('(', $.varnish_internal_return_methods, ')')),
-        ';',
-      ),
+      seq('return', optional(seq('(', $.varnish_internal_return_methods, ')'))),
     // new_stmt: $ => seq('new', field('ident', $.ident), '=', $.expr, ';'),
     new_stmt: $ =>
       seq(
@@ -147,10 +156,9 @@ module.exports = grammar({
         optional(
           seq(
             field('ident', $.ident),
-            optional(seq('=', field('def_right', $.ident_call_expr))),
+            optional(seq('=', optional(field('def_right', $.ident_call_expr)))),
           ),
         ),
-        ';',
       ),
     set_stmt: $ =>
       seq(
@@ -161,9 +169,8 @@ module.exports = grammar({
             optional(seq('=', field('right', choice($.expr, blank())))),
           ),
         ),
-        ';',
       ),
-    unset_stmt: $ => seq('unset', $.nested_ident, ';'),
+    unset_stmt: $ => seq('unset', $.nested_ident),
     expr: $ =>
       choice(
         $.literal,
@@ -282,8 +289,10 @@ module.exports = grammar({
         ')',
       ),
 
-    inline_c: _$ => seq('C{', /[^}]*?}/, token.immediate('C')),
-    // _word: () => /[\w-]+/,
+    inline_c: _$ =>
+      seq('C{', repeat1(choice(/[^{}]+/, seq('{', /[^\}]+/, '}'))), '}C'),
+
+    _word: () => /[\w-]+/,
   },
 });
 
