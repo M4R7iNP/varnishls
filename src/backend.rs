@@ -1,4 +1,4 @@
-// use log::debug;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -340,6 +340,8 @@ impl LanguageServer for Backend {
             data: None,
         })?;
 
+        debug!("goto definition for ident «{}»", ident);
+
         for (_uri, doc) in doc_map.iter() {
             let result = doc.get_definition_by_name(&ident);
             if result.is_none() {
@@ -365,6 +367,7 @@ impl LanguageServer for Backend {
             ))));
         }
 
+        debug!("could not find definition");
         return Ok(None);
     }
 

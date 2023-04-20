@@ -194,7 +194,12 @@ impl Document {
             .ast
             .root_node()
             .descendant_for_point_range(point, point)?;
-        let name = get_node_text(&self.rope, &node);
+        let name = get_node_text(&self.rope, &node)
+            .split(".")
+            .take(1)
+            .next()
+            .unwrap()
+            .to_string();
         Some(name)
     }
 
