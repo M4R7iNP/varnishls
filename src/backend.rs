@@ -1,3 +1,4 @@
+use glob::glob;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,6 +15,7 @@ use tree_sitter::Point;
 use crate::config::Config;
 use crate::document::Document;
 use crate::varnish_builtins::{get_varnish_builtins, Type};
+use crate::vcc::parse_vcc;
 use crate::vmod::read_vmod_lib_by_name;
 
 pub struct Backend {
@@ -41,14 +43,49 @@ impl Backend {
         let config = self.config.read().await;
         let mut scope = get_varnish_builtins();
         let doc_map = self.document_map.read().await;
+
         if let Type::Obj(ref mut obj) = scope {
-            // read all vmods
-            let vmod_futures = doc_map
+            let all_vmod_imports = doc_map
                 .values()
                 .flat_map(|doc| doc.get_vmod_imports())
+                .collect::<Vec<_>>();
+
+            // read all vmods
+            let vcc_files = all_vmod_imports.iter().flat_map(|ref vmod_name| {
+                config
+                    .vcc_paths
+                    .iter()
+                    .flat_map(|vcc_path| {
+                        // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
+                        let mut glob_path = vcc_path.clone();
+                        glob_path.push(format!("libvmod_{}", vmod_name));
+                        glob_path.push("*.vcc");
+                        glob(glob_path.to_str().unwrap()).unwrap()
+                    })
+                    .collect::<Vec<_>>()
+            });
+
+            for vcc_file_path in vcc_files {
+                debug!("parsing vcc file {:?}", vcc_file_path);
+                let vcc_file = tokio::fs::read_to_string(vcc_file_path.unwrap())
+                    .await
+                    .unwrap();
+                let vmod_scope = parse_vcc(vcc_file);
+                let vmod_name = match vmod_scope {
+                    Type::Obj(ref obj) => obj.name.clone(),
+                    _ => panic!(),
+                };
+                debug!("vmod {:?} contains scope: {:?}", vmod_name, vmod_scope);
+                obj.properties.insert(vmod_name, vmod_scope);
+            }
+
+            // read all vmods
+            let vmod_futures = all_vmod_imports
+                .iter()
+                .filter(|vmod_name| obj.properties.get(*vmod_name).is_none()) // filter out vmods found by vcc
                 .map(|ref vmod_name| {
                     tokio::task::spawn(read_vmod_lib_by_name(
-                        vmod_name.into(),
+                        vmod_name.to_string(),
                         config.vmod_paths.to_owned(),
                     ))
                 })

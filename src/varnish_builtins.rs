@@ -19,6 +19,7 @@ pub enum Type {
     // UnresolvedNew, // hack
     Enum(Vec<String>),
     Blob,
+    IP,
 }
 
 impl Type {
@@ -52,7 +53,7 @@ impl std::fmt::Display for Type {
                     _ => "".to_string(),
                 },
                 func.name,
-                func.signature.clone().unwrap_or("()".to_string())
+                func.get_signature_string()
             ),
             Type::Backend => write!(f, "BACKEND"),
             Type::String => write!(f, "STRING"),
@@ -62,8 +63,9 @@ impl std::fmt::Display for Type {
             Type::Acl => write!(f, "ACL"),
             Type::Sub => write!(f, "SUBROUTINE"),
             Type::Probe => write!(f, "PROBE"),
-            Type::Enum(values) => write!(f, "ENUM [{}]", values.join(", ")),
+            Type::Enum(values) => write!(f, "ENUM {{{}}}", values.join(", ")),
             Type::Blob => write!(f, "BLOB"),
+            Type::IP => write!(f, "IP"),
         }
     }
 }
@@ -76,11 +78,11 @@ pub struct Obj {
     pub definition: Option<Definition>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FuncArg {
-    pub name: String,
+    pub name: Option<String>, // None if not named
     pub optional: bool,
-    pub r#type: Type,
+    pub r#type: Option<Type>,
     pub default_value: Option<String>,
 }
 
@@ -88,11 +90,38 @@ pub struct FuncArg {
 pub struct Func {
     pub name: String,
     pub definition: Option<Definition>,
-    pub signature: Option<String>,   // arguments
-    pub ret_type: Option<String>,    // TEMP
+    pub ret_type: Option<String>, // TEMP
     pub r#return: Option<Box<Type>>,
     pub doc: Option<String>,
-    pub arguments: Vec<FuncArg>,
+    pub args: Vec<FuncArg>,
+}
+
+impl Func {
+    pub fn get_signature_string(&self) -> String {
+        format!(
+            "({})",
+            self.args
+                .iter()
+                .map(|arg| {
+                    let mut str = String::new();
+                    if let Some(ref r#type) = arg.r#type {
+                        str.push_str(format!("{}", r#type).as_str());
+                    }
+                    if let Some(ref arg_name) = arg.name {
+                        str.push_str(format!(" {}", arg_name).as_str());
+                    }
+                    if let Some(ref default_value) = arg.default_value {
+                        str.push_str(format!(" = {}", default_value).as_str());
+                    }
+                    if arg.optional {
+                        str = format!("[{}]", str);
+                    }
+                    str
+                })
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
+    }
 }
 
 const DEFAULT_REQUEST_HEADERS: &[&str] = &[
@@ -155,7 +184,7 @@ pub const RETURN_METHODS: &[&str] = &[
 pub fn get_varnish_builtins() -> Type {
     let req: Type = Type::Obj(Obj {
         name: "req".to_string(),
-        read_only: true,
+        read_only: false,
         properties: BTreeMap::from([
             (
                 "http".to_string(),
@@ -172,7 +201,7 @@ pub fn get_varnish_builtins() -> Type {
             ),
             ("url".to_string(), Type::String),
             ("method".to_string(), Type::String),
-            ("hash".to_string(), Type::String),
+            // ("hash".to_string(), Type::String), // varnish 3?
             ("proto".to_string(), Type::String),
             ("backend_hint".to_string(), Type::Backend),
             ("restarts".to_string(), Type::Number),
@@ -186,7 +215,7 @@ pub fn get_varnish_builtins() -> Type {
 
     let bereq: Type = Type::Obj(Obj {
         name: "bereq".to_string(),
-        read_only: true,
+        read_only: false,
         properties: BTreeMap::from([
             (
                 "http".to_string(),
@@ -205,7 +234,7 @@ pub fn get_varnish_builtins() -> Type {
             ("method".to_string(), Type::String),
             ("xid".to_string(), Type::String),
             ("retries".to_string(), Type::Number),
-            ("hash".to_string(), Type::String),
+            // ("hash".to_string(), Type::String),
             ("proto".to_string(), Type::String),
             ("backend".to_string(), Type::Backend),
             ("uncacheable".to_string(), Type::Bool),
@@ -216,7 +245,7 @@ pub fn get_varnish_builtins() -> Type {
 
     let resp: Type = Type::Obj(Obj {
         name: "resp".to_string(),
-        read_only: true,
+        read_only: false,
         properties: BTreeMap::from([
             (
                 "http".to_string(),
@@ -241,7 +270,7 @@ pub fn get_varnish_builtins() -> Type {
 
     let beresp: Type = Type::Obj(Obj {
         name: "beresp".to_string(),
-        read_only: true,
+        read_only: false,
         properties: BTreeMap::from([
             (
                 "http".to_string(),
@@ -273,7 +302,7 @@ pub fn get_varnish_builtins() -> Type {
 
     let obj: Type = Type::Obj(Obj {
         name: "obj".to_string(),
-        read_only: true,
+        read_only: false,
         properties: BTreeMap::from([
             ("ttl".to_string(), Type::Duration),
             ("grace".to_string(), Type::Duration),
@@ -296,7 +325,7 @@ pub fn get_varnish_builtins() -> Type {
     });
 
     let server: Type = Type::Obj(Obj {
-        name: "client".to_string(),
+        name: "server".to_string(),
         read_only: true,
         properties: BTreeMap::from([
             ("ip".to_string(), Type::String),
@@ -308,21 +337,57 @@ pub fn get_varnish_builtins() -> Type {
 
     let regsub = Type::Func(Func {
         name: "regsub".to_string(),
-        signature: Some("(STRING str, STRING regex, STRING sub)".to_string()),
+        args: vec![
+            FuncArg {
+                r#type: Some(Type::String),
+                name: Some("str".into()),
+                ..Default::default()
+            },
+            FuncArg {
+                r#type: Some(Type::String),
+                name: Some("regex".into()),
+                ..Default::default()
+            },
+            FuncArg {
+                r#type: Some(Type::String),
+                name: Some("sub".into()),
+                ..Default::default()
+            },
+        ],
         r#return: Some(Box::new(Type::String)),
         ..Func::default()
     });
 
     let regsuball = Type::Func(Func {
         name: "regsuball".to_string(),
-        signature: Some("(STRING str, STRING regex, STRING sub)".to_string()),
+        args: vec![
+            FuncArg {
+                name: Some("str".into()),
+                r#type: Some(Type::String),
+                ..Default::default()
+            },
+            FuncArg {
+                name: Some("regex".into()),
+                r#type: Some(Type::String),
+                ..Default::default()
+            },
+            FuncArg {
+                name: Some("sub".into()),
+                r#type: Some(Type::String),
+                ..Default::default()
+            },
+        ],
         r#return: Some(Box::new(Type::String)),
         ..Func::default()
     });
 
     let synthetic = Type::Func(Func {
         name: "synthetic".to_string(),
-        signature: Some("(STRING str)".to_string()),
+        args: vec![FuncArg {
+            name: Some("str".into()),
+            r#type: Some(Type::String),
+            ..Default::default()
+        }],
         ..Func::default()
     });
 

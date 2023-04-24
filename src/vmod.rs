@@ -5,7 +5,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use crate::varnish_builtins::{Func, Obj, Type};
+use crate::varnish_builtins::{Func, FuncArg, Obj, Type};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -35,21 +35,61 @@ pub struct VmodData {
     pub scope: Type,
 }
 
-fn parse_vmod_func_signature(serde_value_arr: &[SerdeValue]) -> String {
-    format!(
-        "({})",
-        serde_value_arr
-            .iter()
-            .filter_map(|arg| -> Option<_> {
-                let arg_arr = arg.as_array()?;
-                let input_type = arg_arr.get(0)?.as_str()?.to_string();
-                let name = arg_arr.get(1)?.as_str()?.to_string();
+fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
+    serde_value_arr
+        .iter()
+        .filter_map(|arg| -> Option<_> {
+            let arg_arr = arg.as_array()?;
+            let input_type = arg_arr.get(0)?.as_str().unwrap();
+            let name = match arg_arr.get(1) {
+                Some(SerdeValue::String(str)) => Some(str.to_string()),
+                _ => None,
+            };
+            let default_value = match arg_arr.get(2) {
+                Some(SerdeValue::String(str)) => Some(str.to_string()),
+                _ => None,
+            };
+            let optional = match arg_arr.get(4) {
+                Some(SerdeValue::Bool(bool)) => bool.clone(),
+                _ => false,
+            };
+            let r#type = match input_type {
+                "STRING" => Some(Type::String),
+                "STRING_LIST" => Some(Type::String),
+                "STRANDS" => Some(Type::String),
+                "BOOL" => Some(Type::Bool),
+                "INT" => Some(Type::Number),
+                "REAL" => Some(Type::Number),
+                "IP" => Some(Type::IP),
+                "DURATION" => Some(Type::Duration),
+                "TIME" => Some(Type::Duration),
+                "BYTES" => Some(Type::String), // for now
+                "BLOB" => Some(Type::Blob),
+                "BACKEND" => Some(Type::Backend),
+                "PROBE" => Some(Type::Probe),
+                "ACL" => Some(Type::Acl),
+                "HTTP" => Some(Type::Obj(Default::default())), // for now
+                "HEADER" => Some(Type::Obj(Default::default())), // for now
+                "ENUM" => {
+                    let enum_values = match arg_arr.get(3) {
+                        Some(SerdeValue::Array(values)) => {
+                            Some(values.iter().map(|str| str.to_string()).collect::<Vec<_>>())
+                        }
+                        _ => None,
+                    }?;
+                    Some(Type::Enum(enum_values))
+                }
+                _ => None,
+            };
 
-                Some(format!("{} {}", input_type, name))
+            Some(FuncArg {
+                name,
+                default_value,
+                optional,
+                r#type,
             })
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+        })
+        .collect::<Vec<_>>()
 }
 
 fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn Error>> {
@@ -81,7 +121,7 @@ fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn 
         .filter_map(|result| result.ok())
         .collect();
 
-    let signature = parse_vmod_func_signature(&signature_arr[3..]);
+    let args = parse_vmod_func_args(&signature_arr[3..]);
     let ret_type = ret_types.get(0).ok_or("Missing return type")?.as_str();
     let r#return: Option<Box<Type>> = match ret_type {
         "BACKEND" => Some(Box::new(Type::Backend)),
@@ -95,7 +135,7 @@ fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn 
 
     Ok(Func {
         name,
-        signature: Some(signature),
+        args,
         ret_type: Some(ret_type.to_string()),
         r#return,
         ..Default::default()
@@ -132,7 +172,7 @@ fn parse_vmod_json_obj(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn E
     if let Some(SerdeValue::Array(ref vmod_init_def)) = serde_value_arr.get(4) {
         if let Some(SerdeValue::Array(ref array_containing_signature)) = vmod_init_def.get(1) {
             if let Some(signature_items) = array_containing_signature.get(4..) {
-                func.signature = Some(parse_vmod_func_signature(signature_items));
+                func.args = parse_vmod_func_args(signature_items);
             }
         }
     }
@@ -253,26 +293,10 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
     });
 }
 
-const DEFAULT_SEARCH_PATHS: &[&str] = &[
-    // ubuntu, debian
-    "/usr/lib/x86_64-linux-gnu/varnish/vmods/",
-    // fedora, centos
-    "/usr/lib64/varnish/vmods/",
-    // freebsd
-    "/usr/local/lib/varnish/vmods",
-    // arch
-    "/usr/lib/varnish/vmods",
-];
-
 pub async fn read_vmod_lib_by_name(
     name: String,
     search_paths: Vec<PathBuf>,
 ) -> Result<Option<VmodData>, Box<dyn Error + Send + Sync>> {
-    let mut search_paths = search_paths;
-    if search_paths.is_empty() {
-        search_paths = DEFAULT_SEARCH_PATHS.iter().map(PathBuf::from).collect();
-    }
-
     let file_name = format!("libvmod_{}.so", name);
     for search_path in search_paths {
         let path = search_path.join(&file_name);

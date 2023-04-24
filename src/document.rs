@@ -714,231 +714,6 @@ impl Document {
     /**
      * Expand identifiers into req, res etc. and their properties.
      */
-    pub fn autocomplete_for_pos_bak(
-        &self,
-        pos: Position,
-        global_scope: Type,
-    ) -> Option<Vec<CompletionItem>> {
-        debug!("starting autocomplete");
-        let mut target_point = Point {
-            row: pos.line as usize,
-            column: pos.character as usize,
-        };
-
-        // let mut ctx_node: Option<Node> = None;
-        let mut cursor = self.ast.walk();
-        let mut node: Node;
-        let mut text = "".to_string();
-        let full_text = self.rope.to_string();
-        // let mut ctx_text: Option<&str> = None;
-        let mut search_type: Option<&Type> = None;
-        let mut must_be_writable = false;
-        let mut last_loop = false;
-        debug!("target point: {}", target_point);
-        let target_row = self.rope.line(target_point.row);
-        debug!("target line: ({})", target_row);
-        if matches!(target_row.get_char(target_point.column), None | Some('\n'))
-            && target_point.column > 0
-        {
-            debug!("decrementing by one");
-            target_point.column -= 1;
-        }
-
-        if target_point.column >= target_row.len_chars() {
-            debug!("beyond line");
-        } else if target_row.char(target_point.column) == '\n' {
-            debug!("at line break");
-        }
-        while !last_loop {
-            let idx_opt = cursor.goto_first_child_for_point(target_point);
-            node = cursor.node();
-            debug!("visiting node {:?}", node);
-
-            // fix when cursor is at ;
-            if node.kind() == ";" || node.kind() == "}" {
-                node = node.prev_sibling().unwrap();
-                debug!("fixing ; by going to node {:?}", node);
-                last_loop = true;
-            }
-
-            // try to fix when tree-sitter says we're on a closing curly bracket
-            /*
-            if node.kind() == "}" {
-                node = node.prev_sibling().unwrap();
-                match node.descendant_for_point_range(target_point, target_point) {
-                    Some(possible_node) => {
-                        node = possible_node;
-                        debug!("hmm {:?}", possible_node);
-                    },
-                    _ => {
-                        debug!("meh");
-                    }
-                }
-                debug!("fixing }} by going to node {:?}", node);
-                last_loop = true;
-            }
-            */
-
-            // gather context for autocomplete
-            if let Some(parent_node) = node.parent() {
-                match parent_node.kind() {
-                    "set_stmt" => {
-                        let mut field = cursor.field_name();
-
-                        // When the node under the cursor is «;», select the right field instead
-                        if node.kind() == ";" || node.kind() == "=" {
-                            debug!("hmm ; or =");
-                            field = Some("right");
-                        }
-
-                        match field {
-                            None | Some("left") => {
-                                // autocomplete for left part of set statements must be writeable
-                                must_be_writable = true;
-                            }
-                            Some("right") => {
-                                debug!("right");
-                                // text = get_node_text(&self.rope, &node);
-                                if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                    let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                    if ["req.http.", "resp.http.", "bereq.http.", "beresp.http."]
-                                        .iter()
-                                        .any(|variable| ctx_node_str.starts_with(variable))
-                                    {
-                                        search_type = Some(&Type::String);
-                                    } else {
-                                        search_type =
-                                            lookup_from_scope_by_str(&global_scope, ctx_node_str);
-                                        // ignore objects here
-                                        if let Some(Type::Obj(_obj)) = search_type {
-                                            search_type = None;
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    "backend_property" => {
-                        debug!("found backend_property {:?}", cursor.field_name());
-                        let mut field = cursor.field_name();
-                        if node.kind() == ";" || node.kind() == "=" {
-                            field = Some("right");
-                        } else if node.kind() == "." {
-                            debug!("got .");
-                            field = Some("left");
-                            node = node.parent().unwrap();
-                        }
-
-                        match field {
-                            Some("left") => {
-                                text = get_node_text(&self.rope, &node);
-                                let text = text.strip_prefix('.').unwrap_or(text.as_str());
-                                let parent_parent_node_kind = parent_node.parent().unwrap().kind();
-                                let r#type = match parent_parent_node_kind {
-                                    "probe_declaration" => Type::Probe,
-                                    _ => Type::Backend,
-                                };
-                                return Some(get_probe_backend_fields(r#type, text));
-                            }
-                            Some("right") => {
-                                if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                    let ctx_node_str = &full_text[ctx_node.byte_range()];
-                                    if ctx_node_str == "probe" {
-                                        search_type = Some(&Type::Probe);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        };
-                    }
-                    "call_stmt" => {
-                        search_type = Some(&Type::Sub);
-                    }
-                    _ => {}
-                }
-            }
-
-            // now, try to gather best identifier for autocomplete
-            match node.kind() {
-                "nested_ident" => {
-                    text = get_node_text(&self.rope, &node);
-                    debug!("got text for nested_ident {:?} {}", node, text);
-                    break;
-                }
-                "ident" if node.parent().unwrap().kind() != "nested_ident" => {
-                    text = get_node_text(&self.rope, &node);
-                    debug!("got text for ident {:?} {}", node, text);
-                }
-                _ => {}
-            }
-
-            if idx_opt.is_none() {
-                // has reached the end
-                break;
-            }
-        }
-
-        // debug!("jaggu: {:?}", search_type);
-        // let full_text = self.rope.to_string();
-        // text = &full_text[node.start_byte()..node.end_byte()];
-        // debug!("text: {:?}", text);
-
-        // identifiers written so far (split by dot)
-        let idents: Vec<&str> = text.split('.').collect();
-        // get scope from identifiers written so far (excluding the last one)
-        let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
-
-        // partial match on last identifier written
-        let last_part = idents[idents.len() - 1];
-
-        return match scope.unwrap() {
-            Type::Obj(obj) => Some(
-                obj.properties
-                    .range(last_part.to_string()..)
-                    .take_while(|(key, _v)| key.starts_with(last_part))
-                    .filter(|(_prop_name, property)| {
-                        // debug!("{}: {:?}", _prop_name, property);
-                        // try to match only backends when autocompleting for e.g. req.backend_hint
-                        if let Some(search_type) = search_type {
-                            let has_type = scope_contains_type(property, search_type, true);
-                            debug!("{} has type {}? {}", _prop_name, search_type, has_type);
-                            has_type
-                        } else if must_be_writable {
-                            !obj.read_only || scope_contains_writable(&property)
-                        } else {
-                            // match on everything
-                            true
-                        }
-                    })
-                    .map(|(prop_name, property)| CompletionItem {
-                        label: prop_name.to_string(),
-                        detail: Some(match property {
-                            Type::Func(_func) => format!("{}", property),
-                            Type::Backend => format!("BACKEND {}", prop_name),
-                            _ => format!("{} {}", property, prop_name),
-                        }),
-                        kind: Some(match property {
-                            Type::Func(_func) => CompletionItemKind::FUNCTION,
-                            Type::Obj(_obj) => CompletionItemKind::STRUCT,
-                            Type::Sub => CompletionItemKind::FUNCTION,
-                            _ => CompletionItemKind::PROPERTY,
-                        }),
-                        insert_text: Some(match property {
-                            Type::Func(_func) => format!("{}(", prop_name),
-                            _ => prop_name.to_string(),
-                        }),
-                        ..Default::default()
-                    })
-                    .collect(),
-            ),
-            _ => return None,
-        };
-    }
-
-    /**
-     * Expand identifiers into req, res etc. and their properties.
-     */
     pub fn autocomplete_for_pos(
         &self,
         pos: Position,
@@ -1094,11 +869,7 @@ impl Document {
                             Some("ident") => {
                                 return Some(vec![]);
                             }
-                            Some("def_right") => {
-                                search_type = Some(Type::Func(crate::varnish_builtins::Func {
-                                    ..Default::default()
-                                }));
-                            }
+                            Some("def_right") => search_type = Some(Type::Func(Default::default())),
                             _ => {}
                         }
                     }
@@ -1138,6 +909,8 @@ impl Document {
         let idents: Vec<&str> = text.split('.').collect();
         // get scope from identifiers written so far (excluding the last one)
         let scope = lookup_from_scope(&global_scope, idents[0..idents.len() - 1].to_vec());
+
+        // debug!("scope: {:?}", scope);
 
         // partial match on last identifier written
         let last_part = idents[idents.len() - 1];
@@ -1179,6 +952,15 @@ impl Document {
                             Type::Func(_func) => format!("{}(", prop_name),
                             _ => prop_name.to_string(),
                         }),
+                        documentation: match property {
+                            Type::Func(func) => func.doc.to_owned().map(|doc| {
+                                Documentation::MarkupContent(MarkupContent {
+                                    kind: MarkupKind::Markdown,
+                                    value: doc,
+                                })
+                            }),
+                            _ => None,
+                        },
                         ..Default::default()
                     })
                     .collect::<Vec<_>>();
@@ -1191,40 +973,6 @@ impl Document {
         };
     }
 }
-
-/*
-fn position_to_offset(rope: &Rope, pos: Position) -> usize {
-    let line_offset = rope.offset_of_line(pos.line as usize);
-    let line_slice = rope.slice(line_offset..);
-    let char_offset = line_slice.count_base_units::<Utf16CodeUnitsMetric>(pos.character as usize);
-    line_offset + char_offset
-}
-
-fn offset_to_point(rope: &Rope, offset: usize) -> Point {
-    let row = rope.line_of_offset(offset);
-    let column = offset - rope.offset_of_line(row);
-    Point { row, column }
-}
-*/
-
-/*
-fn offset_to_position(rope: &Rope, offset: usize) -> Position {
-    let row = rope.line_of_offset(offset);
-    let column = offset - rope.offset_of_line(row);
-    Position::new(row as u32, column as u32)
-}
-*/
-
-/*
-fn get_chunk(rope: &Rope, offset: usize) -> &str {
-    let cursor = xi_rope::Cursor::new(&rope, offset);
-    if let Some((node, idx)) = cursor.get_leaf() {
-        &node[idx..]
-    } else {
-        ""
-    }
-}
-*/
 
 fn lookup_from_scope<'a>(global_scope: &'a Type, idents: Vec<&'a str>) -> Option<&'a Type> {
     let mut scope = global_scope;
@@ -1300,7 +1048,7 @@ sub vcl_recv {
             )
             .unwrap();
         println!("result: {:?}", result);
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 1);
         // assert_eq!(result[0].label, "http");
     }
 
