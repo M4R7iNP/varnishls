@@ -17,7 +17,10 @@ make build
 # .varnishls.toml in your workspace dir
 main_vcl = "vg/varnish.vcl" # path to the main vcl file varnish uses
 vmod_paths = ["/usr/lib/varnish-plus/vmods/"] # paths to directories containing your vmods (.so binaries)
+vcc_paths = ["/usr/src/varnish-cache/lib/"] # paths to directories containing vcc files (vmod definition files)
 ```
+
+NOTE: `vcc_paths` takes precedence over `vmod_paths` when searching for vmods, since vcc also has documentation.
 
 #### Neovim lsp setup:
 
