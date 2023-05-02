@@ -75,7 +75,7 @@ impl Backend {
                     Type::Obj(ref obj) => obj.name.clone(),
                     _ => panic!(),
                 };
-                debug!("vmod {:?} contains scope: {:?}", vmod_name, vmod_scope);
+                // debug!("vmod {:?} contains scope: {:?}", vmod_name, vmod_scope);
                 obj.properties.insert(vmod_name, vmod_scope);
             }
 
@@ -278,6 +278,7 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -558,6 +559,51 @@ impl LanguageServer for Backend {
         Ok(workspace_edit)
     }
     */
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let scope = self.get_all_definitions_across_all_documents().await;
+        let doc_map = self.document_map.read().await;
+        let doc = doc_map.get(&uri.to_string()).unwrap();
+        let pos = params.text_document_position_params.position;
+        let point = Point {
+            row: pos.line as usize,
+            column: pos.character as usize,
+        };
+        let r#type = match doc.get_type_at_point(point, scope) {
+            Some(r#type) => r#type,
+            None => return Ok(None),
+        };
+
+        if let Type::Func(func) = r#type {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: format!(
+                        "{} {}{}{}",
+                        func.r#return
+                            .as_ref()
+                            .map(|r| format!("{}", r))
+                            .unwrap_or_else(|| "VOID".to_string()),
+                        func.name,
+                        func.get_signature_string(),
+                        func.doc
+                            .map(|doc| format!("\n\n{doc}"))
+                            .unwrap_or_else(|| "".to_string())
+                    ),
+                }),
+                range: None,
+            }));
+        }
+
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::PlainText,
+                value: format!("{}", r#type),
+            }),
+            range: None,
+        }))
+    }
 
     async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
         self.client

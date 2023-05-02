@@ -189,6 +189,38 @@ impl Document {
         self.ast = ast;
     }
 
+    pub fn get_type_at_point(&self, point: Point, scope: Type) -> Option<Type> {
+        let mut node = self
+            .ast
+            .root_node()
+            .descendant_for_point_range(point, point)?;
+        // let Type::Obj(obj) = scope;
+        loop {
+            if matches!(node.kind(), "ident_call_expr") {
+                let ident_node = node.child_by_field_name("ident")?;
+                let ident = get_node_text(&self.rope, &ident_node);
+                let parts = ident.split('.').collect::<Vec<&str>>();
+                let r#type = lookup_from_scope(&scope, parts);
+                if r#type.is_some() {
+                    return r#type.cloned();
+                }
+            }
+            if matches!(node.kind(), "nested_ident" | "ident") {
+                let ident = get_node_text(&self.rope, &node);
+                let parts = ident.split('.').collect::<Vec<&str>>();
+                let r#type = lookup_from_scope(&scope, parts);
+                if r#type.is_some() {
+                    return r#type.cloned();
+                }
+            }
+            node = match node.parent() {
+                Some(node) => node,
+                None => break,
+            }
+        }
+        None
+    }
+
     pub fn get_ident_at_point(&self, point: Point) -> Option<String> {
         let node = self
             .ast
