@@ -55,21 +55,27 @@ impl Backend {
                 config
                     .vcc_paths
                     .iter()
-                    .flat_map(|vcc_path| {
+                    .flat_map(|vcc_path| -> Vec<_> {
                         // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
                         let mut glob_path = vcc_path.clone();
                         glob_path.push(format!("libvmod_{}", vmod_name));
                         glob_path.push("*.vcc");
-                        glob(glob_path.to_str().unwrap()).unwrap()
+                        glob(glob_path.to_str().unwrap())
+                            .and_then(|paths| Ok(paths.collect::<Vec<_>>()))
+                            .unwrap_or(vec![])
                     })
                     .collect::<Vec<_>>()
             });
 
             for vcc_file_path in vcc_files {
                 debug!("parsing vcc file {:?}", vcc_file_path);
-                let vcc_file = tokio::fs::read_to_string(vcc_file_path.unwrap())
-                    .await
-                    .unwrap();
+                let vcc_file = match tokio::fs::read_to_string(vcc_file_path.unwrap()).await {
+                    Ok(file) => file,
+                    Err(err) => {
+                        debug!("Failed to read vcc file: {err}");
+                        continue;
+                    }
+                };
                 let vmod_scope = parse_vcc(vcc_file);
                 let vmod_name = match vmod_scope {
                     Type::Obj(ref obj) => obj.name.clone(),
