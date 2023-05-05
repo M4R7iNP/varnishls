@@ -252,7 +252,7 @@ impl LanguageServer for Backend {
             }),
             offset_encoding: None,
             capabilities: ServerCapabilities {
-                inlay_hint_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(false)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
                     // TextDocumentSyncKind::FULL,
