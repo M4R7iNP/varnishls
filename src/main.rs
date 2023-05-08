@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use log::debug;
 use simplelog::{Config, LevelFilter, WriteLogger};
 use std::path::PathBuf;
@@ -29,16 +29,20 @@ pub struct Cli {
 enum Command {
     Lsp {
         /// Debug mode
-        #[clap(short = 'd', long = "debug")]
+        #[clap(short, long)]
         debug: bool,
-        #[clap(long = "stdio")]
+        #[clap(long)]
         stdio: bool,
+        #[clap(long, requires = "port")]
+        listen: bool,
+        #[clap(long, requires = "listen")]
+        port: Option<u16>,
     },
 
     Lint {
         /// Files to lint
         files: Vec<PathBuf>,
-        #[clap(long = "level")]
+        #[clap(long)]
         level: Option<LintLevel>,
     },
 
@@ -46,10 +50,10 @@ enum Command {
         /// VMOD name
         name: String,
         /// Path to VMOD
-        #[clap(long = "path")]
+        #[clap(long)]
         path: Option<String>,
         /// Dump vmod JSON
-        #[clap(long = "json")]
+        #[clap(long)]
         json: bool,
     },
 
@@ -57,7 +61,6 @@ enum Command {
         /// Files to lint
         path: PathBuf,
     },
-
 }
 
 #[tokio::main]
@@ -65,7 +68,12 @@ async fn main() -> ExitCode {
     let cli: Cli = Parser::parse();
 
     match cli.command {
-        Command::Lsp { debug, .. } => {
+        Command::Lsp {
+            debug,
+            stdio,
+            listen,
+            port,
+        } => {
             if debug {
                 let _ = WriteLogger::init(
                     LevelFilter::Debug,
@@ -76,11 +84,32 @@ async fn main() -> ExitCode {
 
             debug!("start");
 
-            let stdin = tokio::io::stdin();
-            let stdout = tokio::io::stdout();
-
-            let (service, socket) = LspService::build(Backend::new).finish();
-            Server::new(stdin, stdout, socket).serve(service).await;
+            if listen {
+                let port = port.unwrap();
+                let listener = tokio::net::TcpListener::bind(format!("[::1]:{port}"))
+                    .await
+                    .unwrap();
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    tokio::spawn(async move {
+                        let (input, output) = stream.split();
+                        let (service, socket) = LspService::build(Backend::new).finish();
+                        Server::new(input, output, socket).serve(service).await;
+                    });
+                }
+            } else if stdio {
+                let stdin = tokio::io::stdin();
+                let stdout = tokio::io::stdout();
+                let (service, socket) = LspService::build(Backend::new).finish();
+                Server::new(stdin, stdout, socket).serve(service).await;
+            } else {
+                let mut cmd = Cli::command();
+                cmd.error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    "Missing either --stdio or --listen",
+                )
+                .exit();
+            }
         }
         Command::Lint { files, level } => {
             let mut results = Vec::new();
@@ -144,9 +173,7 @@ async fn main() -> ExitCode {
             }
         }
         Command::InspectVcc { path } => {
-            let src = fs::read_to_string(&path)
-                .await
-                .expect("Could not read VCC");
+            let src = fs::read_to_string(&path).await.expect("Could not read VCC");
 
             let scope = varnishls::vcc::parse_vcc(src);
             println!("scope: {:?}", scope);
