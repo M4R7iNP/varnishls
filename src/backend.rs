@@ -1,8 +1,8 @@
-use glob::glob;
+use glob::{glob, GlobResult};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use toml;
@@ -48,28 +48,32 @@ impl Backend {
             let all_vmod_imports = doc_map
                 .values()
                 .flat_map(|doc| doc.get_vmod_imports())
-                .collect::<Vec<_>>();
+                .collect::<HashSet<_>>();
 
             // read all vmods
-            let vcc_files = all_vmod_imports.iter().flat_map(|ref vmod_name| {
-                config
-                    .vcc_paths
-                    .iter()
-                    .flat_map(|vcc_path| -> Vec<_> {
-                        // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
-                        let mut glob_path = vcc_path.clone();
-                        glob_path.push(format!("libvmod_{}", vmod_name));
-                        glob_path.push("*.vcc");
-                        glob(glob_path.to_str().unwrap())
-                            .and_then(|paths| Ok(paths.collect::<Vec<_>>()))
-                            .unwrap_or(vec![])
-                    })
-                    .collect::<Vec<_>>()
-            });
+            let vcc_files = all_vmod_imports
+                .iter()
+                .flat_map(|ref vmod_name| {
+                    config
+                        .vcc_paths
+                        .iter()
+                        .flat_map(|vcc_path| -> Vec<GlobResult> {
+                            // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
+                            let mut glob_path = vcc_path.clone();
+                            glob_path.push(format!("libvmod_{}", vmod_name));
+                            glob_path.push("*.vcc");
+                            glob(glob_path.to_str().unwrap())
+                                .map(|paths| paths.collect::<Vec<GlobResult>>())
+                                .unwrap_or_else(|_| vec![])
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter_map(|result| result.ok())
+                .collect::<Vec<_>>();
 
             for vcc_file_path in vcc_files {
                 debug!("parsing vcc file {:?}", vcc_file_path);
-                let vcc_file = match tokio::fs::read_to_string(vcc_file_path.unwrap()).await {
+                let vcc_file = match tokio::fs::read_to_string(vcc_file_path).await {
                     Ok(file) => file,
                     Err(err) => {
                         debug!("Failed to read vcc file: {err}");
@@ -90,6 +94,7 @@ impl Backend {
                 .iter()
                 .filter(|vmod_name| obj.properties.get(*vmod_name).is_none()) // filter out vmods found by vcc
                 .map(|ref vmod_name| {
+                    debug!("spawning task to vmod binary for «{vmod_name}»");
                     tokio::task::spawn(read_vmod_lib_by_name(
                         vmod_name.to_string(),
                         config.vmod_paths.to_owned(),
