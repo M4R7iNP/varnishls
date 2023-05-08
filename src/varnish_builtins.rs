@@ -102,7 +102,7 @@ impl Func {
             "({})",
             self.args
                 .iter()
-                .map(|arg| {
+                .filter_map(|arg| {
                     let mut str = String::new();
                     if let Some(ref r#type) = arg.r#type {
                         str.push_str(format!("{}", r#type).as_str());
@@ -116,7 +116,12 @@ impl Func {
                     if arg.optional {
                         str = format!("[{}]", str);
                     }
-                    str
+
+                    if str.len() > 0 {
+                        Some(str)
+                    } else {
+                        None
+                    }
                 })
                 .collect::<Vec<String>>()
                 .join(", ")
