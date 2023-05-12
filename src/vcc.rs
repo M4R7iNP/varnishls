@@ -161,10 +161,24 @@ fn parse_type<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<
             // TODO: consume enum values
             let mut values = vec![];
 
-            while toks.next_if(|&tok| tok == "{" || tok == ",").is_some() {
-                values.push(toks.next().unwrap().to_string());
+            assert_eq!(toks.next(), Some("{"), "expected enum values");
+            while let Some(tok) = toks.next() {
+                values.push(tok.to_string());
+                match toks.next() {
+                    Some(",") => {
+                        continue;
+                    }
+                    Some("}") => {
+                        break;
+                    }
+                    Some(tok) => {
+                        panic!("unexpected token «{tok}». expected either «,» or «}}»");
+                    }
+                    _ => {
+                        panic!("unexpected end of enums");
+                    }
+                }
             }
-            toks.next(); // consume }
             Some(Type::Enum(values))
         }
         "VOID" | "PRIV_TASK" | "PRIV_VCL" | "PRIV_CALL" | "STEVEDORE" => None,
@@ -186,7 +200,6 @@ fn parse_func<'a>(
 
     let args = parse_func_args(toks);
     // assert_eq!(toks.next(), Some(")"), "expected end of arguments");
-    // println!("hohoho: {:?}", func.args);
     let doc = parse_doc(lines_iter);
 
     Func {
@@ -264,14 +277,12 @@ pub fn parse_vcc(vcc_file: String) -> Type {
         // let tok_vec = tokenize(first_line, None, None);
         // let mut toks = tok_vec.iter().peekable().map(|tok| *tok);
         let mut toks = Tokenizer::new(first_line).peekable();
-        // println!("hello: ({:?})", toks);
         match toks.next().expect("No tokens") {
             "Module" => {
                 scope.name = toks.next().unwrap().to_string();
             }
             "ABI" => {}
             "Function" => {
-                println!("func line: {}", first_line);
                 let func = parse_func(&mut toks, &mut lines_iter);
                 scope
                     .properties
@@ -290,7 +301,6 @@ pub fn parse_vcc(vcc_file: String) -> Type {
                 while let Some(ps) = parts.peek() {
                     let mut lines_iter = ps.split_terminator("\n\n");
                     let first_line = lines_iter.next().unwrap();
-                    println!("line: {}", first_line);
                     // let tok_vec = tokenize(first_line, None, None);
                     // let mut toks = tok_vec.iter().peekable().map(|tok| *tok);
                     let mut toks = Tokenizer::new(first_line).peekable();
