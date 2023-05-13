@@ -195,15 +195,22 @@ fn parse_func<'a>(
 ) -> Func {
     let r#return = parse_type(toks).map(Box::new);
 
-    let name = toks.next().unwrap().to_string();
+    let func_name = toks.next().unwrap().to_string();
+    let func_name_without_prefix = match func_name.as_str().get(..1) {
+        Some(".") => func_name[1..].to_owned(),
+        None => panic!("invalid VCC function"),
+        _ => func_name.to_owned()
+    };
+
     assert_eq!(toks.next(), Some("("), "expected arguments");
 
     let args = parse_func_args(toks);
     // assert_eq!(toks.next(), Some(")"), "expected end of arguments");
     let doc = parse_doc(lines_iter);
 
+
     Func {
-        name,
+        name: func_name_without_prefix,
         r#return,
         args,
         doc: Some(doc),
