@@ -195,7 +195,7 @@ fn parse_func<'a>(
 ) -> Func {
     let r#return = parse_type(toks).map(Box::new);
 
-    let name = toks.next().unwrap().to_string();
+    let name = toks.next().unwrap().trim_start_matches('.').to_string();
     assert_eq!(toks.next(), Some("("), "expected arguments");
 
     let args = parse_func_args(toks);
