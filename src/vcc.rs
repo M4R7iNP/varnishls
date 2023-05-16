@@ -246,7 +246,7 @@ fn parse_func_args<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Ve
                 continue;
             }
             Some(&")") | None => break,
-            Some(tok) => assert!(false, "unexpected token {tok:?}"),
+            Some(tok) => panic!("unexpected token {tok:?}"),
         }
     }
 
@@ -330,6 +330,14 @@ pub fn parse_vcc(vcc_file: String) -> Type {
     Type::Obj(scope)
 }
 
+pub fn parse_vcc_file_by_path(
+    vcc_path: &std::path::Path,
+) -> Result<Type, Box<dyn std::error::Error + Send + Sync>> {
+    let vcc_file = std::fs::read_to_string(vcc_path)?;
+    let vmod_scope = parse_vcc(vcc_file);
+    Ok(vmod_scope)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::vcc::*;
@@ -364,7 +372,7 @@ mod tests {
         if let Some(Type::Enum(ref enum_vals)) = func.args[1].r#type {
             assert_eq!(*enum_vals, vec!["IN".to_string(), "OUT".to_string()]);
         } else {
-            assert!(false, "arg 2 not enum");
+            panic!("arg 2 not enum");
         }
         assert_eq!(func.args[1].default_value, Some("OUT".into()));
     }

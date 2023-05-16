@@ -1,7 +1,8 @@
 use crate::{
     parser, static_autocomplete_items,
     varnish_builtins::{
-        self, scope_contains_type, scope_contains_writable, Type, BACKEND_FIELDS, PROBE_FIELDS,
+        self, get_backend_field_types, get_probe_field_types, scope_contains_type,
+        scope_contains_writable, Type,
     },
 };
 
@@ -393,8 +394,7 @@ impl Document {
                     }
                 }
                 "backend_property" => {
-                    let left = node.child_by_field_name("left");
-                    match left {
+                    let left_ident = match node.child_by_field_name("left") {
                         None => {
                             error_ranges.push(LintError {
                                 message: "Missing backend property field".to_string(),
@@ -406,29 +406,18 @@ impl Document {
                             });
                             continue;
                         }
-                        Some(left_node) => {
-                            let parent_parent_node_kind = node.parent().unwrap().kind();
-                            let fields = match parent_parent_node_kind {
-                                "probe_declaration" => PROBE_FIELDS,
-                                _ => BACKEND_FIELDS,
-                            };
+                        Some(left_node) => &full_text[left_node.byte_range()],
+                    };
 
-                            let text = &full_text[left_node.byte_range()];
-                            if !fields.iter().any(|field| field == &text) {
-                                error_ranges.push(LintError {
-                                    message: format!("Backend property «{}» does not exist", text),
-                                    loc: Location {
-                                        uri: self.url.to_owned(),
-                                        range,
-                                    },
-                                    severity: DiagnosticSeverity::ERROR,
-                                });
-                            }
-                        }
-                    }
+                    let parent_parent_node_kind = node.parent().unwrap().kind();
+                    let map = match parent_parent_node_kind {
+                        "probe_declaration" => get_probe_field_types(),
+                        _ => get_backend_field_types(),
+                    };
 
-                    let right = node.child_by_field_name("right");
-                    if right.is_none() {
+                    let r#type = map.get(left_ident);
+
+                    let Some(right_node) = node.child_by_field_name("right") else {
                         error_ranges.push(LintError {
                             message: "Missing backend property value".to_string(),
                             loc: Location {
@@ -438,6 +427,59 @@ impl Document {
                             severity: DiagnosticSeverity::ERROR,
                         });
                         continue;
+                    };
+
+                    if right_node.kind() == "string_list" && left_ident != "request" {
+                        error_ranges.push(LintError {
+                            message: format!("Property {left_ident} cannot contain string list"),
+                            loc: Location {
+                                uri: self.url.to_owned(),
+                                range,
+                            },
+                            severity: DiagnosticSeverity::ERROR,
+                        });
+                    }
+
+                    match r#type {
+                        None => {
+                            error_ranges.push(LintError {
+                                message: format!(
+                                    "Backend property «{}» does not exist",
+                                    left_ident
+                                ),
+                                loc: Location {
+                                    uri: self.url.to_owned(),
+                                    range,
+                                },
+                                severity: DiagnosticSeverity::ERROR,
+                            });
+                        }
+                        Some(r#type) => {
+                            let Some(right_node_type) = node_to_type(&right_node) else {
+                                error_ranges.push(LintError {
+                                    message: format!("Unexpected value"),
+                                    loc: Location {
+                                        uri: self.url.to_owned(),
+                                        range,
+                                    },
+                                    severity: DiagnosticSeverity::ERROR,
+                                });
+                                continue;
+                            };
+                            if !right_node_type.can_this_cast_into(r#type) {
+                                error_ranges.push(LintError {
+                                    message: format!(
+                                        "Expected {}, found {}",
+                                        r#type, right_node_type
+                                    ),
+                                    loc: Location {
+                                        uri: self.url.to_owned(),
+                                        range,
+                                    },
+                                    severity: DiagnosticSeverity::ERROR,
+                                });
+                            }
+                        }
                     }
                 }
                 "nested_ident" | "ident" => {
@@ -1054,13 +1096,12 @@ fn point_to_position(point: Point) -> Position {
 }
 
 fn get_probe_backend_fields(r#type: Type, text: &str) -> Vec<CompletionItem> {
-    let fields = match r#type {
-        Type::Probe => PROBE_FIELDS,
-        _ => BACKEND_FIELDS,
+    let map = match r#type {
+        Type::Probe => get_probe_field_types(),
+        _ => get_backend_field_types(),
     };
-    fields
-        .iter()
-        .filter(|field| field.starts_with(&text))
+    map.keys()
+        .filter(|field| field.starts_with(text))
         .map(|field| CompletionItem {
             label: field.to_string(),
             detail: Some(field.to_string()),
@@ -1068,6 +1109,18 @@ fn get_probe_backend_fields(r#type: Type, text: &str) -> Vec<CompletionItem> {
             ..Default::default()
         })
         .collect()
+}
+
+pub fn node_to_type(node: &Node) -> Option<Type> {
+    match node.kind() {
+        "string" => Some(Type::String),
+        "string_list" => Some(Type::String),
+        "number" => Some(Type::Number),
+        "duration" => Some(Type::Duration),
+        "bool" => Some(Type::Bool),
+        "literal" => node_to_type(&node.child(0)?),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

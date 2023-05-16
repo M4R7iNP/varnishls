@@ -39,7 +39,7 @@ pub fn source_file() -> Vec<CompletionItem> {
         })
         .for_each(|item| statements.push(item));
 
-    return statements;
+    statements
 }
 
 pub fn subroutine() -> Vec<CompletionItem> {

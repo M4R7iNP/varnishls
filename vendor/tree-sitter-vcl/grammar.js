@@ -65,14 +65,7 @@ module.exports = grammar({
       seq(
         'probe',
         field('ident', $.ident),
-        field(
-          'body',
-          seq(
-            '{',
-            repeat(choice($.backend_property, $.probe_request_string_list)),
-            '}',
-          ),
-        ),
+        field('body', seq('{', repeat($.backend_property), '}')),
       ),
     import_declaration: $ =>
       seq(
@@ -85,26 +78,28 @@ module.exports = grammar({
     include_declaration: $ => seq('include', $.string),
     include_declaration_with_semi: $ => seq($.include_declaration, ';'),
 
+    // quirk, probe .request can have a list of strings
     backend_property: $ =>
       seq(
         '.',
         optional(
           seq(
             field('left', $.ident),
-            optional(seq('=', field('right', optional($.expr)), ';')),
+            optional(
+              seq(
+                '=',
+                field(
+                  'right',
+                  optional(choice($.expr, $.string_list)),
+                ),
+                ';',
+              ),
+            ),
           ),
         ),
       ),
-    // quirk, probe .request can have a list of strings
-    probe_request_string_list: $ =>
-      seq(
-        '.',
-        field('left', 'request'),
-        '=',
-        field('right', repeat1($.string)),
-        ';',
-      ),
     acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
+    string_list: $ => repeat2($.string),
 
     stmt: $ => choice($.if_stmt, $._statements_with_semicolon),
 
@@ -303,4 +298,8 @@ function commaSep(rule) {
     // optional trailing comma
     optional(','),
   );
+}
+
+function repeat2(rule) {
+  return seq(rule, repeat1(rule));
 }

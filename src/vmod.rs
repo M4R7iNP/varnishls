@@ -50,7 +50,7 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
                 _ => None,
             };
             let optional = match arg_arr.get(4) {
-                Some(SerdeValue::Bool(bool)) => bool.clone(),
+                Some(SerdeValue::Bool(bool)) => *bool,
                 _ => false,
             };
             let r#type = match input_type {

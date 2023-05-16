@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::mem::discriminant;
 
 use crate::document::Definition;
@@ -117,7 +117,7 @@ impl Func {
                         str = format!("[{}]", str);
                     }
 
-                    if str.len() > 0 {
+                    if !str.is_empty() {
                         Some(str)
                     } else {
                         None
@@ -168,6 +168,19 @@ pub const PROBE_FIELDS: &[&str] = &[
     "initial",
 ];
 
+pub fn get_probe_field_types<'a>() -> HashMap<&'a str, Type> {
+    return HashMap::from([
+        ("url", Type::String),
+        ("request", Type::String),
+        ("expected_response", Type::Number),
+        ("timeout", Type::Duration),
+        ("interval", Type::Duration),
+        ("window", Type::Number),
+        ("threshold", Type::Number),
+        ("initial", Type::Number),
+    ]);
+}
+
 // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L311-L322
 pub const BACKEND_FIELDS: &[&str] = &[
     "host",
@@ -181,6 +194,20 @@ pub const BACKEND_FIELDS: &[&str] = &[
     "max_connections",
     "proxy_header",
 ];
+
+pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
+    return HashMap::from([
+        ("host", Type::String),
+        ("port", Type::Number), // can be string
+        ("path", Type::String),
+        ("host_header", Type::String),
+        ("connection_timeout", Type::Duration),
+        ("between_bytes_timeout", Type::Duration),
+        ("probe", Type::Probe),
+        ("max_connections", Type::String),
+        ("proxy_header", Type::String),
+    ]);
+}
 
 pub const RETURN_METHODS: &[&str] = &[
     "hit", "miss", "pass", "pipe", "retry", "restart", "fail", "synth", "hash", "deliver",

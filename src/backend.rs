@@ -1,5 +1,5 @@
 use glob::{glob, GlobResult};
-use log::debug;
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -15,7 +15,7 @@ use tree_sitter::Point;
 use crate::config::Config;
 use crate::document::Document;
 use crate::varnish_builtins::{get_varnish_builtins, Type};
-use crate::vcc::parse_vcc;
+use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
 
 pub struct Backend {
@@ -39,74 +39,94 @@ impl Backend {
         }
     }
 
+    /**
+     * Gathers all defined identifiers across all documents loaded, and
+     * then parses vmods either by vmod lib binary or vcc file
+     *
+     * parse_vcc and parse_vmod both contains runtime assertions, so they
+     * are ran in their own threads.
+     */
     async fn get_all_definitions_across_all_documents(&self) -> Type {
         let config = self.config.read().await;
-        let mut scope = get_varnish_builtins();
+        let mut scope = get_varnish_builtins(); // initial scope
         let doc_map = self.document_map.read().await;
 
-        if let Type::Obj(ref mut obj) = scope {
-            let all_vmod_imports = doc_map
-                .values()
-                .flat_map(|doc| doc.get_vmod_imports())
-                .collect::<HashSet<_>>();
+        let Type::Obj(ref mut obj) = scope else { unreachable!() };
 
-            // read all vmods
-            let vcc_files = all_vmod_imports
-                .iter()
-                .flat_map(|ref vmod_name| {
-                    config
-                        .vcc_paths
-                        .iter()
-                        .flat_map(|vcc_path| -> Vec<GlobResult> {
-                            // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
-                            let mut glob_path = vcc_path.clone();
-                            glob_path.push(format!("libvmod_{}", vmod_name));
-                            glob_path.push("*.vcc");
-                            glob(glob_path.to_str().unwrap())
-                                .map(|paths| paths.collect::<Vec<GlobResult>>())
-                                .unwrap_or_else(|_| vec![])
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .filter_map(|result| result.ok())
-                .collect::<Vec<_>>();
+        let all_vmod_imports = doc_map
+            .values()
+            .flat_map(|doc| doc.get_vmod_imports())
+            .collect::<HashSet<_>>();
 
-            for vcc_file_path in vcc_files {
-                debug!("parsing vcc file {:?}", vcc_file_path);
-                let vcc_file = match tokio::fs::read_to_string(vcc_file_path).await {
-                    Ok(file) => file,
-                    Err(err) => {
-                        debug!("Failed to read vcc file: {err}");
-                        continue;
-                    }
-                };
-                let vmod_scope = parse_vcc(vcc_file);
-                let vmod_name = match vmod_scope {
-                    Type::Obj(ref obj) => obj.name.clone(),
-                    _ => panic!(),
-                };
-                // debug!("vmod {:?} contains scope: {:?}", vmod_name, vmod_scope);
-                obj.properties.insert(vmod_name, vmod_scope);
-            }
+        /*
+         * read all vcc files by glob (expects e.g. "{vcc_files_dir}/libvmod_std/vmod.vcc")
+         *
+         * TODO: maybe read all vcc files at startup, cache them, and then lookup from here.
+         * TODO: support pointing to singular vcc file or vmod src dir containing a vcc file
+         */
+        let vcc_files: Vec<_> = all_vmod_imports
+            .iter()
+            .flat_map(|ref vmod_name| {
+                config
+                    .vcc_paths
+                    .iter()
+                    .flat_map(|vcc_path| -> Vec<GlobResult> {
+                        // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
+                        let mut glob_path = vcc_path.clone();
+                        glob_path.push(format!("libvmod_{}", vmod_name));
+                        glob_path.push("*.vcc");
+                        glob(glob_path.to_str().unwrap())
+                            .map(|paths| paths.collect::<Vec<GlobResult>>())
+                            .unwrap_or_else(|_| vec![])
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|result| result.ok())
+            .collect::<Vec<_>>();
 
-            // read all vmods
-            let vmod_futures = all_vmod_imports
-                .iter()
-                .filter(|vmod_name| obj.properties.get(*vmod_name).is_none()) // filter out vmods found by vcc
-                .map(|ref vmod_name| {
-                    debug!("spawning task to vmod binary for «{vmod_name}»");
-                    tokio::task::spawn(read_vmod_lib_by_name(
-                        vmod_name.to_string(),
-                        config.vmod_paths.to_owned(),
-                    ))
-                })
-                .collect::<Vec<_>>();
+        // parse each vcc file in their own thread.
+        let mut set = tokio::task::JoinSet::new();
+        for vcc_file_path in vcc_files {
+            // debug!("parsing vcc file {:?}", vcc_file_path);
+            set.spawn(async move { parse_vcc_file_by_path(&vcc_file_path) });
+        }
 
-            for vmod_fut in vmod_futures {
-                if let Ok(Ok(Some(vmod))) = vmod_fut.await {
-                    let vmod_obj = vmod.scope;
-                    obj.properties.insert(vmod.name, vmod_obj);
+        while let Some(result) = set.join_next().await {
+            let result = result
+                .map_err(Box::<dyn std::error::Error + Send + Sync>::from) // map JoinError into generic error
+                .and_then(|result| result); // replace with result from parse_vcc_file_by_path
+
+            match result {
+                Err(err) => {
+                    self.emit_error(err.to_string()).await;
                 }
+                Ok(vmod_scope) => {
+                    let vmod_name = match vmod_scope {
+                        Type::Obj(ref obj) => obj.name.clone(),
+                        _ => unreachable!(),
+                    };
+                    obj.properties.insert(vmod_name, vmod_scope);
+                }
+            }
+        }
+
+        // read all vmods
+        let vmod_futures = all_vmod_imports
+            .iter()
+            .filter(|vmod_name| !obj.properties.contains_key(*vmod_name)) // filter out vmods found by vcc
+            .map(|ref vmod_name| {
+                // debug!("spawning task to vmod binary for «{vmod_name}»");
+                tokio::task::spawn(read_vmod_lib_by_name(
+                    vmod_name.to_string(),
+                    config.vmod_paths.to_owned(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        for vmod_fut in vmod_futures {
+            if let Ok(Ok(Some(vmod))) = vmod_fut.await {
+                let vmod_obj = vmod.scope;
+                obj.properties.insert(vmod.name, vmod_obj);
             }
         }
 
@@ -199,6 +219,11 @@ impl Backend {
         let doc = Document::new(doc_url.clone(), file);
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(doc.url.to_string(), doc);
+    }
+
+    async fn emit_error(&self, err_msg: String) {
+        error!("{err_msg}");
+        self.client.log_message(MessageType::ERROR, err_msg).await;
     }
 }
 
