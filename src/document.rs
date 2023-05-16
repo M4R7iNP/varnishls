@@ -227,7 +227,7 @@ impl Document {
             .root_node()
             .descendant_for_point_range(point, point)?;
         let name = get_node_text(&self.rope, &node)
-            .split(".")
+            .split('.')
             .take(1)
             .next()
             .unwrap()
@@ -957,11 +957,11 @@ impl Document {
                         // debug!("{}: {:?}", _prop_name, property);
                         // try to match only backends when autocompleting for e.g. req.backend_hint
                         if let Some(ref search_type) = search_type {
-                            let has_type = scope_contains_type(property, &search_type, true);
+                            let has_type = scope_contains_type(property, search_type, true);
                             debug!("{} has type {}? {}", _prop_name, search_type, has_type);
                             has_type
                         } else if must_be_writable {
-                            !obj.read_only || scope_contains_writable(&property)
+                            !obj.read_only || scope_contains_writable(property)
                         } else {
                             // match on everything
                             true
@@ -981,9 +981,29 @@ impl Document {
                             _ => CompletionItemKind::PROPERTY,
                         }),
                         insert_text: Some(match property {
-                            Type::Func(_func) => format!("{}(", prop_name),
+                            Type::Func(func) => {
+                                let args_str = func
+                                    .args
+                                    .iter()
+                                    .enumerate()
+                                    .map_while(|(idx, arg)| {
+                                        if arg.optional || arg.default_value.is_some() {
+                                            return None;
+                                        }
+                                        let mut str = format!("${{{}", idx + 1).to_string();
+                                        if let Some(ref name) = arg.name {
+                                            str.push_str(&format!(":{name}"));
+                                        }
+                                        str.push('}');
+                                        Some(str)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!("{}({})", prop_name, args_str)
+                            }
                             _ => prop_name.to_string(),
                         }),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
                         documentation: match property {
                             Type::Func(func) => func.doc.to_owned().map(|doc| {
                                 Documentation::MarkupContent(MarkupContent {
@@ -996,7 +1016,7 @@ impl Document {
                         ..Default::default()
                     })
                     .collect::<Vec<_>>();
-                if obj.name == "GLOBAL".to_string() {
+                if obj.name == *"GLOBAL" {
                     suggestions.append(&mut keyword_suggestions);
                 }
                 Some(suggestions)
