@@ -65,8 +65,8 @@
 (ident) @variable
 (nested_ident) @variable
 [
-  ((nested_ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)"))
-  ((ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)"))
+  ((nested_ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)\b"))
+  ((ident) @_content (#match? @_content "^(req|bereg|resp|beresp|obj|client|sess|server)\b"))
 ] @variable.builtin
 (enum_ident) @constant
 
