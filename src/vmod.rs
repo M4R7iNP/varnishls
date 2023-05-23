@@ -82,6 +82,9 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
                 _ => None,
             };
 
+            // return None if no type
+            r#type.as_ref()?;
+
             Some(FuncArg {
                 name,
                 default_value,

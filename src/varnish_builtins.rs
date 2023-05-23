@@ -1,7 +1,17 @@
 use std::collections::{BTreeMap, HashMap};
 use std::mem::discriminant;
+use tower_lsp::lsp_types::Location;
 
-use crate::document::Definition;
+use crate::document::NestedPos;
+
+pub type Properties = BTreeMap<String, Type>;
+
+// implemented by Obj and Definitions
+pub trait HasTypeProperties {
+    fn get_type_properties_by_range(&self, partial_ident: &str) -> Vec<(&String, &Type)>;
+    fn get_type_property(&self, ident: &str) -> Option<&Type>;
+    fn obj(&self) -> Option<&Obj>;
+}
 
 #[derive(Debug, Clone)]
 pub enum Type {
@@ -29,8 +39,8 @@ impl Type {
 
     pub fn can_this_cast_into(&self, other: &Self) -> bool {
         match self {
-            Type::String | Type::Number | Type::Duration => match other {
-                Type::String | Type::Number | Type::Duration => {
+            Type::String | Type::Number | Type::Duration | Type::IP => match other {
+                Type::String | Type::Number | Type::Duration | Type::IP => {
                     return true;
                 }
                 _ => {}
@@ -70,12 +80,145 @@ impl std::fmt::Display for Type {
     }
 }
 
+// top level scope
+#[derive(Debug, Default)]
+pub struct Definitions {
+    pub properties: BTreeMap<String, Definition>,
+}
+
+impl Definitions {
+    /// alias to default for now
+    pub fn new() -> Definitions {
+        Definitions::default()
+    }
+}
+
+pub struct AutocompleteSearchOptions {
+    pub search_type: Option<Type>,
+    // pub ignore_type: Option<Type>,
+    pub must_be_writable: Option<bool>,
+}
+
+impl Definitions {
+    pub fn get(&self, ident: &str) -> Option<&Definition> {
+        self.properties.get(&ident.to_string())
+    }
+
+    pub fn get_type_property_by_nested_idents(&self, idents: Vec<&str>) -> Option<&Type> {
+        let mut scope: &dyn HasTypeProperties = self;
+        let (idents, [last_ident, ..]) = idents.split_at(idents.len() - 1) else {
+            unreachable!("Failed to split identifier by period");
+        };
+        for ident in idents {
+            let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
+                 return None;
+            };
+            scope = obj;
+        }
+        scope.get_type_property(last_ident)
+    }
+
+    pub fn get_type_properties_by_idents(
+        &self,
+        idents: Vec<&str>,
+        options: AutocompleteSearchOptions,
+    ) -> Option<Vec<(&String, &Type)>> {
+        // let mut scope: &dyn HasTypeProperties = self;
+        // let mut scope: &AutocompleteScope = &self;
+        let mut scope: &dyn HasTypeProperties = self;
+        let (idents, [last_ident, ..]) = idents.split_at(idents.len() - 1) else {
+            unreachable!("Failed to split identifier by period");
+        };
+        for ident in idents {
+            let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
+                 return None;
+            };
+            scope = obj;
+            // scope = &AutocompleteScope::Obj(obj);
+        }
+
+        Some(
+            scope
+                .get_type_properties_by_range(last_ident)
+                .iter()
+                .filter(|(_prop_name, property)| {
+                    if let Some(ref search_type) = options.search_type {
+                        scope_contains_type(property, search_type, true)
+                    } else if options.must_be_writable.is_some_and(|val| val) {
+                        let is_writable = scope.obj().map_or(false, |obj| !obj.read_only);
+                        is_writable || scope_contains_writable(property)
+                    } else {
+                        // match on everything
+                        true
+                    }
+                })
+                .map(|(a, b)| (*a, *b)) // hmm
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+impl HasTypeProperties for Definitions {
+    fn get_type_properties_by_range(&self, partial_ident: &str) -> Vec<(&String, &Type)> {
+        self.properties
+            .range(partial_ident.to_string()..)
+            .take_while(|(key, _v)| key.starts_with(partial_ident))
+            .map(|(name, def)| (name, &(*def.r#type)))
+            .collect()
+    }
+    fn get_type_property(&self, ident: &str) -> Option<&Type> {
+        self.properties
+            .get(&ident.to_string())
+            .map(|def| &(*def.r#type))
+    }
+    fn obj(&self) -> Option<&Obj> {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Definition {
+    pub ident_str: String,
+    pub r#type: Box<Type>,
+    // TODO: replace line_num and doc_url with a Location?
+    // pub line_num: usize,
+    // pub doc_url: Option<String>,
+    pub loc: Option<Location>,
+    pub nested_pos: Option<NestedPos>,
+}
+
+impl Definition {
+    pub fn new_builtin(ident_str: String, r#type: Type) -> Definition {
+        Definition {
+            ident_str,
+            r#type: Box::new(r#type),
+            loc: None,
+            nested_pos: None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Obj {
     pub name: String,
-    pub properties: BTreeMap<String, Type>,
+    pub properties: Properties,
     pub read_only: bool,
     pub definition: Option<Definition>,
+}
+
+impl HasTypeProperties for Obj {
+    fn get_type_properties_by_range(&self, partial_ident: &str) -> Vec<(&String, &Type)> {
+        self.properties
+            .range(partial_ident.to_string()..)
+            .take_while(|(key, _v)| key.starts_with(partial_ident))
+            .collect()
+    }
+    fn get_type_property(&self, ident: &str) -> Option<&Type> {
+        self.properties.get(&ident.to_string())
+    }
+    fn obj(&self) -> Option<&Obj> {
+        Some(self)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -169,7 +312,7 @@ pub const PROBE_FIELDS: &[&str] = &[
 ];
 
 pub fn get_probe_field_types<'a>() -> HashMap<&'a str, Type> {
-    return HashMap::from([
+    HashMap::from([
         ("url", Type::String),
         ("request", Type::String),
         ("expected_response", Type::Number),
@@ -178,7 +321,7 @@ pub fn get_probe_field_types<'a>() -> HashMap<&'a str, Type> {
         ("window", Type::Number),
         ("threshold", Type::Number),
         ("initial", Type::Number),
-    ]);
+    ])
 }
 
 // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L311-L322
@@ -196,7 +339,7 @@ pub const BACKEND_FIELDS: &[&str] = &[
 ];
 
 pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
-    return HashMap::from([
+    HashMap::from([
         ("host", Type::String),
         ("port", Type::Number), // can be string
         ("path", Type::String),
@@ -206,14 +349,14 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("probe", Type::Probe),
         ("max_connections", Type::String),
         ("proxy_header", Type::String),
-    ]);
+    ])
 }
 
 pub const RETURN_METHODS: &[&str] = &[
     "hit", "miss", "pass", "pipe", "retry", "restart", "fail", "synth", "hash", "deliver",
     "abandon", "lookup", "error", "purge",
 ];
-pub fn get_varnish_builtins() -> Type {
+pub fn get_varnish_builtins() -> Definitions {
     let req: Type = Type::Obj(Obj {
         name: "req".to_string(),
         read_only: false,
@@ -423,25 +566,43 @@ pub fn get_varnish_builtins() -> Type {
         ..Func::default()
     });
 
-    let global_scope: Type = Type::Obj(Obj {
-        name: "GLOBAL".to_string(),
-        read_only: true,
-        properties: BTreeMap::from([
-            ("req".to_string(), req),
-            ("bereq".to_string(), bereq),
-            ("resp".to_string(), resp),
-            ("beresp".to_string(), beresp),
-            ("obj".to_string(), obj),
-            ("client".to_string(), client),
-            ("server".to_string(), server),
-            ("regsub".to_string(), regsub),
-            ("regsuball".to_string(), regsuball),
-            ("synthetic".to_string(), synthetic),
-        ]),
-        ..Obj::default()
+    let hash_data = Type::Func(Func {
+        name: "hash_data".to_string(),
+        args: vec![FuncArg {
+            name: Some("str".into()),
+            r#type: Some(Type::String),
+            ..Default::default()
+        }],
+        ..Func::default()
     });
 
-    global_scope
+    let ban = Type::Func(Func {
+        name: "ban".to_string(),
+        args: vec![FuncArg {
+            name: Some("str".into()),
+            r#type: Some(Type::String),
+            ..Default::default()
+        }],
+        ..Func::default()
+    });
+
+    Definitions {
+        #[rustfmt::skip]
+        properties: BTreeMap::from([
+            ("req".into(),       Definition::new_builtin("req".into(),       req      )),
+            ("bereq".into(),     Definition::new_builtin("bereq".into(),     bereq    )),
+            ("resp".into(),      Definition::new_builtin("resp".into(),      resp     )),
+            ("beresp".into(),    Definition::new_builtin("beresp".into(),    beresp   )),
+            ("obj".into(),       Definition::new_builtin("obj".into(),       obj      )),
+            ("client".into(),    Definition::new_builtin("client".into(),    client   )),
+            ("server".into(),    Definition::new_builtin("server".into(),    server   )),
+            ("regsub".into(),    Definition::new_builtin("regsub".into(),    regsub   )),
+            ("regsuball".into(), Definition::new_builtin("regsuball".into(), regsuball)),
+            ("synthetic".into(), Definition::new_builtin("synthetic".into(), synthetic)),
+            ("hash_data".into(), Definition::new_builtin("hash_data".into(), hash_data)),
+            ("ban".into(),       Definition::new_builtin("ban".into(),       ban)),
+        ]),
+    }
 }
 
 /*
