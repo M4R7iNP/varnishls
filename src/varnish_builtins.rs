@@ -144,7 +144,9 @@ impl Definitions {
                 .filter(|(_prop_name, property)| {
                     if let Some(ref search_type) = options.search_type {
                         scope_contains_type(property, search_type, true)
-                    } else if options.must_be_writable.is_some_and(|val| val) {
+                    } else if options.must_be_writable.is_some()
+                        && options.must_be_writable.unwrap()
+                    {
                         let is_writable = scope.obj().map_or(false, |obj| !obj.read_only);
                         is_writable || scope_contains_writable(property)
                     } else {
