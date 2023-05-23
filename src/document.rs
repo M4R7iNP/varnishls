@@ -461,28 +461,26 @@ impl Document {
                         let mut call_nested_pos = doc_nested_pos.clone();
                         call_nested_pos.push(point_to_tuple(node.start_position()));
 
-                        if definition
-                            .nested_pos
-                            .as_ref()
-                            .is_some_and(|nested_pos| nested_pos.gt(&call_nested_pos))
-                        {
-                            let line = definition.loc.as_ref().unwrap().range.start.line;
-                            let filename = definition
-                                .loc
-                                .as_ref()
-                                .and_then(|loc| {
-                                    loc.uri
-                                        .path_segments()
-                                        .and_then(|path_segments| path_segments.last())
-                                })
-                                .unwrap_or("<UNKNOWN>");
+                        if let Some(ref nested_pos) = definition.nested_pos {
+                            if nested_pos.gt(&call_nested_pos) {
+                                let line = definition.loc.as_ref().unwrap().range.start.line;
+                                let filename = definition
+                                    .loc
+                                    .as_ref()
+                                    .and_then(|loc| {
+                                        loc.uri
+                                            .path_segments()
+                                            .and_then(|path_segments| path_segments.last())
+                                    })
+                                    .unwrap_or("<UNKNOWN>");
 
-                            add_error!(
-                                "{} is defined in {} at line {}",
-                                ident_parts[0],
-                                filename,
-                                line + 1
-                            );
+                                add_error!(
+                                    "{} is defined in {} at line {}",
+                                    ident_parts[0],
+                                    filename,
+                                    line + 1
+                                );
+                            }
                         }
                     }
 
@@ -527,7 +525,7 @@ impl Document {
                             let Some(_arg) = func
                                 .args
                                 .iter()
-                                .find(|arg| arg.name.as_ref().is_some_and(|name| name == arg_name)) else {
+                                .find(|arg| arg.name.is_some() && arg.name.as_ref().unwrap() == arg_name) else {
                                 add_error!(node: arg_node, "No such argument named {arg_name}");
                                 continue;
                             };
