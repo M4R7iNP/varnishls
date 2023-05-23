@@ -236,21 +236,21 @@ impl Document {
         Some(name)
     }
 
-    pub fn get_definition_by_name(&self, name: &String) -> Option<(Point, Point)> {
+    pub fn get_definition_by_name(&self, name: &str) -> Option<(Point, Point)> {
+        let name_escaped = name.replace('"', "\\\"");
         let q = Query::new(
             self.ast.language(),
             &format!(
                 r#"
                 [
-                    (toplev_declaration (_ ident: (ident) @ident (#eq? @ident "{}")))
-                    (new_stmt (ident) @left (#eq? @left "{}"))
+                    (toplev_declaration (_ ident: (ident) @ident (#eq? @ident "{name_escaped}")))
+                    (new_stmt (ident) @left (#eq? @left "{name_escaped}"))
                 ] @node
                 "#,
-                name, name
             ),
         );
         if let Err(err) = q {
-            debug!("Error: {}", err);
+            log::error!("Failed exec query for goto definition: {}", err);
             return None;
         }
         let q = q.unwrap();
@@ -747,7 +747,14 @@ impl Document {
     pub fn get_references_for_ident(&self, ident: &str) -> Vec<Reference> {
         let q = Query::new(
             self.ast.language(),
-            &format!(r#"((ident) @ident (#eq? @ident "{}"))"#, ident),
+            &format!(
+                r#"
+                [
+                    ((ident) @ident (#eq? @ident "{ident}"))
+                    ((nested_ident) @nested_ident (#match? @nested_ident "^{ident}\\b"))
+                ]
+                "#
+            ),
         );
         if let Err(err) = q {
             debug!("Error: {}", err);
@@ -760,12 +767,13 @@ impl Document {
         let str_bytes = str.as_bytes();
         let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
+        let nested_ident_capt_idx = q.capture_index_for_name("nested_ident").unwrap();
         let mut refs: Vec<Reference> = Vec::new();
         for each_match in all_matches {
             let ident_capture = each_match
                 .captures
                 .iter()
-                .find(|c| c.index == ident_capt_idx)
+                .find(|c| c.index == ident_capt_idx || c.index == nested_ident_capt_idx)
                 .unwrap();
             let text = &str[ident_capture.node.byte_range()];
             let line_num = ident_capture.node.start_position().row;
