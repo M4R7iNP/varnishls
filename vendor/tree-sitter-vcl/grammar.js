@@ -88,10 +88,7 @@ module.exports = grammar({
             optional(
               seq(
                 '=',
-                field(
-                  'right',
-                  optional(choice($.expr, $.string_list)),
-                ),
+                field('right', optional(choice($.expr, $.string_list))),
                 ';',
               ),
             ),
@@ -139,7 +136,10 @@ module.exports = grammar({
     else_stmt: $ => seq('else', '{', repeat($.stmt), '}'),
     call_stmt: $ => seq('call', field('ident', $.ident)), // subroutine call expr (e.g. «call strip_query_params;»)
     ident_call_expr: $ =>
-      prec('call', seq(field('ident', $.nested_ident), $.func_call_args)), // function call expr (e.g. «if (querystring.get("")) {}»)
+      prec(
+        'call',
+        seq(field('ident', $.nested_ident), field('args', $.func_call_args)),
+      ), // function call expr (e.g. «if (querystring.get("")) {}»)
     ident_call_stmt: $ => $.ident_call_expr, // function call statement (e.g. «var.global_set("a", "b");» )
 
     ret_stmt: $ =>
@@ -236,7 +236,6 @@ module.exports = grammar({
     bytes: $ => seq($.number, choice('B', 'KB', 'MB', 'GB', 'TB')),
 
     ident: () => /[a-zA-Z][\w-]*/, // ident must start with a letter
-    enum_ident: () => /[A-Z_]+/,
     // optional due to autocomplete
     nested_ident: () =>
       token(
@@ -271,15 +270,20 @@ module.exports = grammar({
       ),
     func_call_named_arg: $ =>
       seq(
-        field('arg_name', $.nested_ident), // breaks when using $.ident
+        field('arg_name', $.ident),
         '=',
-        field('arg_value', choice($.expr, $.enum_ident)),
+        field('arg_value', choice($.expr, $.ident)),
       ),
     func_call_args: $ =>
       seq(
         '(',
         optional(
-          commaSep(choice(choice($.expr, $.enum_ident), $.func_call_named_arg)),
+          commaSep(
+            field(
+              'arg',
+              choice($.func_call_named_arg, choice($.expr, $.ident)),
+            ),
+          ),
         ),
         ')',
       ),

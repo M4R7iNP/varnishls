@@ -225,12 +225,15 @@ fn parse_func_args<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Ve
             .next_if(|tok| *tok == "=")
             .map(|_| arg_toks.next().unwrap().to_string());
 
-        args.push(FuncArg {
-            name,
-            optional,
-            r#type,
-            default_value,
-        });
+        // skip unrecognized types
+        if r#type.is_some() {
+            args.push(FuncArg {
+                name,
+                optional,
+                r#type,
+                default_value,
+            });
+        }
 
         if optional {
             assert_eq!(

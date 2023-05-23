@@ -13,7 +13,7 @@ fn get_if_completion() -> CompletionItem {
 }
 
 pub fn source_file() -> Vec<CompletionItem> {
-    let mut statements = vec![get_if_completion()];
+    let mut statements = vec![];
 
     ["sub", "acl", "backend", "probe"]
         .iter()

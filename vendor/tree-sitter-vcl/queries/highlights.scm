@@ -75,6 +75,6 @@
   right: (literal (string) @string.regex (#offset! @string.regex 0 1 0 -1)))
 
 (func_call_named_arg
-   arg_name: (nested_ident) @parameter)
+   arg_name: (ident) @parameter)
 
 (COMMENT) @comment
