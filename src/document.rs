@@ -7,12 +7,11 @@ use crate::{
 };
 
 use log::debug;
-use ropey::Rope;
+use ropey::{iter::Chunks, Rope};
+use std::iter::Iterator;
 use std::sync::{Arc, Mutex};
 use tower_lsp::lsp_types::*;
-use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, Tree};
-
-pub type NestedPos = Vec<(usize, usize)>;
+use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
 #[derive(Clone, Copy)]
 pub enum FileType {
@@ -59,6 +58,8 @@ pub struct LintError {
     pub severity: DiagnosticSeverity,
     pub loc: Location,
 }
+
+pub type NestedPos = Vec<(usize, usize)>;
 
 // reserved keywords, without top-level only declarations
 const RESERVED_KEYWORDS: &[&str] = &[
@@ -261,22 +262,12 @@ impl Document {
         }
         let q = q.unwrap();
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("node").unwrap();
 
         for each_match in all_matches {
             if let Some(capture) = each_match.captures.iter().find(|c| c.index == capt_idx) {
                 let range = capture.node.range();
-                let line = range.start_point.row;
-                let col = range.start_point.column;
-                debug!(
-                    "[Line: {:?}, Col: {:?}] Matching source code: `{:?}`",
-                    line,
-                    col,
-                    &str[range.start_byte..range.end_byte]
-                );
                 return Some((range.start_point, range.end_point));
             }
         }
@@ -293,7 +284,6 @@ impl Document {
     // TO CHECK: probes, ident_call_exprs
     // TO NOT CHECK: backends, subroutines
     pub fn get_error_ranges(&self, global_scope: Definitions) -> Vec<LintError> {
-        let full_text = self.rope.to_string();
         let mut cursor = self.ast.walk();
         let mut error_ranges = Vec::new();
         let mut recurse = true;
@@ -374,7 +364,7 @@ impl Document {
                             add_error!("Missing backend property field");
                             continue;
                         }
-                        Some(left_node) => &full_text[left_node.byte_range()],
+                        Some(ref left_node) => get_node_text(&self.rope, left_node),
                     };
 
                     let parent_parent_node_kind = node.parent().unwrap().kind();
@@ -383,7 +373,7 @@ impl Document {
                         _ => get_backend_field_types(),
                     };
 
-                    let r#type = map.get(left_ident);
+                    let r#type = map.get(left_ident.as_str());
 
                     let Some(right_node) = node.child_by_field_name("right") else {
                         add_error!("Missing backend property value");
@@ -399,7 +389,7 @@ impl Document {
                             add_error!("Backend property «{}» does not exist", left_ident);
                         }
                         Some(r#type) => {
-                            if right_node.kind() == "nested_ident" {
+                            if right_node.kind() == "ident" {
                                 let right_ident = get_node_text(&self.rope, &right_node);
                                 let Some(ident_type) = global_scope.get_type_property(&right_ident) else {
                                     add_error!(node: right_node, "Undefined value");
@@ -431,8 +421,8 @@ impl Document {
                         add_error!("Missing identifier");
                         continue;
                     };
-                    let ident = &self.rope.to_string()[ident_node.byte_range()];
-                    let Some(definition) = global_scope.get(ident) else {
+                    let ident = get_node_text(&self.rope, &ident_node);
+                    let Some(definition) = global_scope.get(ident.as_str()) else {
                         add_error!("Undefined subroutine");
                         continue;
                     };
@@ -464,7 +454,7 @@ impl Document {
                     let Some(ident_node) = node.child_by_field_name("ident") else {
                         continue;
                     };
-                    let full_ident = &self.rope.to_string()[ident_node.byte_range()];
+                    let full_ident = get_node_text(&self.rope, &ident_node);
                     let ident_parts = full_ident.split('.').collect::<Vec<_>>();
                     let Some(definition) = global_scope.get(ident_parts[0]) else {
                         add_error!("{} undefined", ident_parts[0]);
@@ -535,11 +525,11 @@ impl Document {
                             let Some(arg_name_node) = arg_node.child_by_field_name("arg_name") else { continue; };
                             let Some(_arg_value_node) = arg_node.child_by_field_name("arg_value") else { continue; };
                             arg_value_node = _arg_value_node;
-                            let arg_name = &self.rope.to_string()[arg_name_node.byte_range()];
+                            let arg_name = get_node_text(&self.rope, &arg_name_node);
                             let Some(_arg) = func
                                 .args
                                 .iter()
-                                .find(|arg| arg.name.is_some() && arg.name.as_ref().unwrap() == arg_name) else {
+                                .find(|arg| arg.name.is_some() && arg.name.as_ref().unwrap().eq(arg_name.as_str())) else {
                                 add_error!(node: arg_node, "No such argument named {arg_name}");
                                 continue;
                             };
@@ -562,8 +552,7 @@ impl Document {
                                     add_error!(node: arg_node, "Enum not found");
                                     continue;
                                 }
-                                let enum_value =
-                                    &self.rope.to_string()[arg_value_node.byte_range()];
+                                let enum_value = get_node_text(&self.rope, &arg_value_node);
                                 if !enum_values.contains(&enum_value.to_string()) {
                                     add_error!(
                                         node: arg_node,
@@ -591,8 +580,8 @@ impl Document {
                     }
                 }
                 "nested_ident" | "ident" => {
-                    let text = &self.rope.to_string()[node.byte_range()];
-                    if RESERVED_KEYWORDS.contains(&text) {
+                    let text = get_node_text(&self.rope, &node);
+                    if RESERVED_KEYWORDS.contains(&text.as_str()) {
                         add_error!("Reserved keyword");
                         continue;
                     }
@@ -619,8 +608,7 @@ impl Document {
 
                     if toplev_decl.kind() == "sub_declaration" {
                         if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
-                            let sub_name_string = get_node_text(&self.rope, &ident_node);
-                            let sub_name = sub_name_string.as_str();
+                            let sub_name = &*get_node_text(&self.rope, &ident_node);
                             let parts = text.split('.').collect::<Vec<&str>>();
                             if sub_name.starts_with("vcl_") {
                                 let exists_in_sub = match parts[0] {
@@ -685,19 +673,17 @@ impl Document {
         let ast = self.ast.clone();
         let q = Query::new(ast.language(), "(import_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
 
         let mut imports = Vec::new();
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let ts_range = capture.node.range();
-                let text = &str[ts_range.start_byte..ts_range.end_byte];
+                let name = get_node_text(&self.rope, &capture.node).to_string();
                 let range = ts_range_to_lsp_range(ts_range);
                 imports.push(VmodImport {
-                    name: text.to_string(),
+                    name,
                     loc: Location {
                         uri: self.url.to_owned(),
                         range,
@@ -718,16 +704,14 @@ impl Document {
         let ast = self.ast.clone();
         let q = Query::new(ast.language(), "(include_declaration (string) @string)").unwrap();
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("string").unwrap();
 
         let mut includes = Vec::new();
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
-                let text = &str[range.start_byte..range.end_byte];
+                let text = get_node_text(&self.rope, &capture.node);
                 let path = text.trim_matches('"').to_string();
                 let mut nested_pos = nested_pos.clone();
                 nested_pos.push((range.start_point.row, range.start_point.column));
@@ -746,17 +730,14 @@ impl Document {
         let ast = self.ast.clone();
         let q = Query::new(ast.language(), "(sub_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
 
         let mut import_names: Vec<String> = Vec::new();
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
-                let range = capture.node.range();
-                let text = &str[range.start_byte..range.end_byte];
-                import_names.push(text.to_string());
+                let text = get_node_text(&self.rope, &capture.node).to_string();
+                import_names.push(text);
             }
         }
 
@@ -781,9 +762,7 @@ impl Document {
         let q = q.unwrap();
 
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let node_capt_idx = q.capture_index_for_name("node").unwrap();
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
         let def_ident_capt_idx = q.capture_index_for_name("def_ident").unwrap();
@@ -801,8 +780,7 @@ impl Document {
                 .iter()
                 .find(|c| c.index == ident_capt_idx)
                 .unwrap();
-            let text = &str[ident_capture.node.byte_range()];
-            // let line_num = node_capture.node.start_position().row;
+            let text = get_node_text(&self.rope, &ident_capture.node);
             let loc = Location {
                 uri: self.url.clone(),
                 range: ts_range_to_lsp_range(node_capture.node.range()),
@@ -818,8 +796,7 @@ impl Document {
                         .iter()
                         .find(|c| c.index == def_ident_capt_idx)
                         .unwrap();
-                    let def_text_range = def_ident_capture.node.range();
-                    let def_text = &str[def_text_range.start_byte..def_text_range.end_byte];
+                    let def_text = get_node_text(&self.rope, &def_ident_capture.node);
                     let r#type = scope_with_vmods
                         .get_type_property_by_nested_idents(def_text.split('.').collect());
 
@@ -877,9 +854,7 @@ impl Document {
         let q = q.unwrap();
 
         let mut qc = QueryCursor::new();
-        let str = self.rope.to_string();
-        let str_bytes = str.as_bytes();
-        let all_matches = qc.matches(&q, self.ast.root_node(), str_bytes);
+        let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
         let nested_ident_capt_idx = q.capture_index_for_name("nested_ident").unwrap();
         let mut refs: Vec<Reference> = Vec::new();
@@ -889,7 +864,7 @@ impl Document {
                 .iter()
                 .find(|c| c.index == ident_capt_idx || c.index == nested_ident_capt_idx)
                 .unwrap();
-            let text = &str[ident_capture.node.byte_range()];
+            let text = get_node_text(&self.rope, &ident_capture.node);
             let line_num = ident_capture.node.start_position().row;
             refs.push(Reference {
                 ident_str: text.to_string(),
@@ -933,7 +908,6 @@ impl Document {
         debug!("target point: {}", target_point);
 
         let mut text = "".to_string();
-        let full_text = self.rope.to_string();
         let mut search_type: Option<Type> = None;
         let mut must_be_writable = false;
         let mut keyword_suggestions = vec![];
@@ -975,7 +949,7 @@ impl Document {
                         Some("right") => {
                             // text = get_node_text(&self.rope, &node);
                             if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                let ctx_node_str = get_node_text(&self.rope, &ctx_node);
                                 if ["req.http.", "resp.http.", "bereq.http.", "beresp.http."]
                                     .iter()
                                     .any(|variable| ctx_node_str.starts_with(variable))
@@ -1018,7 +992,7 @@ impl Document {
                         }
                         Some("right") => {
                             if let Some(ctx_node) = parent_node.child_by_field_name("left") {
-                                let ctx_node_str = &full_text[ctx_node.byte_range()];
+                                let ctx_node_str = get_node_text(&self.rope, &ctx_node);
                                 if ctx_node_str == "probe" {
                                     search_type = Some(Type::Probe);
                                 }
@@ -1084,11 +1058,11 @@ impl Document {
             // now, try to gather best identifier for autocomplete
             match node.kind() {
                 "nested_ident" => {
-                    text = get_node_text(&self.rope, &node);
+                    text = get_node_text(&self.rope, &node).to_string();
                     debug!("got text for nested_ident {:?} {}", node, text);
                 }
                 "ident" if node.parent().unwrap().kind() != "nested_ident" => {
-                    text = get_node_text(&self.rope, &node);
+                    text = get_node_text(&self.rope, &node).to_string();
                     debug!("got text for ident {:?} {}", node, text);
                 }
                 _ => {}
@@ -1106,8 +1080,6 @@ impl Document {
         }
 
         // debug!("jaggu: {:?}", search_type);
-        // let full_text = self.rope.to_string();
-        // text = &full_text[node.start_byte()..node.end_byte()];
         debug!("text: «{:?}»", text);
 
         // identifiers written so far (split by dot)
@@ -1177,6 +1149,29 @@ impl Document {
         Some(suggestions)
     }
 }
+
+pub struct RopeChunkBytesIterator<'a> {
+    chunks: Chunks<'a>,
+}
+
+impl<'a> Iterator for RopeChunkBytesIterator<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<Self::Item> {
+        self.chunks.next().map(|chunk| chunk.as_bytes())
+    }
+}
+
+// TextProvider for tree-sitter to use ropey as efficiently as possible
+impl<'a> TextProvider<'a> for &'a Document {
+    type I = RopeChunkBytesIterator<'a>;
+    fn text(&mut self, node: Node) -> Self::I {
+        RopeChunkBytesIterator {
+            chunks: self.rope.byte_slice(node.byte_range()).chunks(),
+        }
+    }
+}
+
+// Misc helper functions
 
 fn point_to_position(point: Point) -> Position {
     Position {
