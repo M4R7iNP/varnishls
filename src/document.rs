@@ -8,10 +8,7 @@ use crate::{
 
 use log::debug;
 use ropey::Rope;
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, Tree};
 
@@ -717,7 +714,7 @@ impl Document {
         imports
     }
 
-    pub fn get_includes(&self, nested_pos: NestedPos) -> VecDeque<Include> {
+    pub fn get_includes(&self, nested_pos: &NestedPos) -> Vec<Include> {
         let ast = self.ast.clone();
         let q = Query::new(ast.language(), "(include_declaration (string) @string)").unwrap();
         let mut qc = QueryCursor::new();
@@ -726,7 +723,7 @@ impl Document {
         let all_matches = qc.matches(&q, ast.root_node(), str_bytes);
         let capt_idx = q.capture_index_for_name("string").unwrap();
 
-        let mut includes = VecDeque::new();
+        let mut includes = Vec::new();
         for each_match in all_matches {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
@@ -734,7 +731,7 @@ impl Document {
                 let path = text.trim_matches('"').to_string();
                 let mut nested_pos = nested_pos.clone();
                 nested_pos.push((range.start_point.row, range.start_point.column));
-                includes.push_back(Include {
+                includes.push(Include {
                     path_str: path,
                     nested_pos,
                     doc_url: Some(self.url.to_string()),
@@ -1480,7 +1477,7 @@ sub vcl_recv {
             .to_string(),
             None,
         );
-        let result = doc.get_includes(vec![]);
+        let result = doc.get_includes(&vec![]);
         println!("result: {:?}", result);
         assert_eq!(
             result.iter().map(|inc| &inc.path_str).collect::<Vec<_>>(),
