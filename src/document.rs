@@ -947,7 +947,7 @@ impl Document {
         let mut cursor = self.ast.root_node().walk();
         // walk down, then up again
         while cursor.goto_first_child_for_point(target_point).is_some() {}
-        println!("cursor.node(): {:?}", cursor.node());
+        debug!("cursor.node(): {:?}", cursor.node());
         let mut stop = false;
         while !stop {
             let node = cursor.node();
