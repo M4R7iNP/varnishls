@@ -740,13 +740,16 @@ fn get_all_documents<'a>(
         return vec![];
     };
 
-    main_doc
+    let mut docs = vec![main_doc];
+    let mut includes = main_doc
         .get_includes(nested_pos)
         .iter()
         .flat_map(|include| {
             get_all_documents(doc_map, root_uri, &include.path_str, &include.nested_pos)
         })
-        .collect()
+        .collect();
+    docs.append(&mut includes);
+    docs
 }
 
 #[derive(Debug, Deserialize, Serialize)]
