@@ -1529,4 +1529,46 @@ sub vcl_init {
         println!("result: {:?}", result);
         assert_eq!(result.len(), 2);
     }
+
+    #[test]
+    fn backend_with_probe_works() {
+        let doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
+            r#"
+probe my_probe {
+    .request =
+        "GET /healthz HTTP/1.1"
+        "Host: localhost"
+        "User-Agent: varnish-probe"
+        "Connection: close";
+    .interval = 1s;
+    .timeout = 3.0s;
+    .window = 5;
+    .threshold = 3;
+    .initial = 3;
+    .expected_response = 200;
+}
+
+backend my_backend {
+    .host = "195.88.54.16";
+    .port = "80";
+    .probe = my_probe;
+}
+"#
+            .to_string(),
+            None,
+        );
+
+        let mut defs = get_varnish_builtins();
+        let doc_defs = doc.get_all_definitions(&defs);
+        assert_eq!(doc_defs.len(), 2, "Should return two definitions");
+        let mut map: BTreeMap<String, Definition> = BTreeMap::from_iter(
+            doc_defs
+                .iter()
+                .map(|def| (def.ident_str.to_string(), def.clone())),
+        );
+        defs.properties.append(&mut map);
+        let errors = doc.diagnostics(defs);
+        assert_eq!(errors.len(), 0, "Should produce no errors");
+    }
 }

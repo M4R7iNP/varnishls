@@ -138,7 +138,10 @@ module.exports = grammar({
     ident_call_expr: $ =>
       prec(
         'call',
-        seq(field('ident', $.nested_ident), field('args', $.func_call_args)),
+        seq(
+          field('ident', choice($.nested_ident, $.ident)),
+          field('args', $.func_call_args),
+        ),
       ), // function call expr (e.g. «if (querystring.get("")) {}»)
     ident_call_stmt: $ => $.ident_call_expr, // function call statement (e.g. «var.global_set("a", "b");» )
 
@@ -174,6 +177,7 @@ module.exports = grammar({
         $.parenthesized_expression,
         $.binary_expression,
         $.neg_expr,
+        $.ident,
       ),
     parenthesized_expression: $ => seq('(', $.expr, ')'),
 
@@ -279,10 +283,7 @@ module.exports = grammar({
         '(',
         optional(
           commaSep(
-            field(
-              'arg',
-              choice($.func_call_named_arg, choice($.expr, $.ident)),
-            ),
+            field('arg', choice($.expr, $.ident, $.func_call_named_arg)),
           ),
         ),
         ')',
