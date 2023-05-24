@@ -127,11 +127,6 @@ impl Document {
     }
 
     fn edit_range(&mut self, _version: i32, range: Range, text: String) {
-        // let start = position_to_offset(&self.rope, range.start);
-        // let end = position_to_offset(&self.rope, range.end);
-        // let new_end_byte = start + text.as_bytes().len();
-
-        // let mut new_rope = self.rope.clone();
         let mut new_ast = self.ast.clone();
 
         let old_end_position_point = Point {
@@ -203,7 +198,7 @@ impl Document {
             .ast
             .root_node()
             .descendant_for_point_range(point, point)?;
-        // let Type::Obj(obj) = scope;
+
         loop {
             if matches!(node.kind(), "ident_call_expr") {
                 let ident_node = node.child_by_field_name("ident")?;
@@ -226,9 +221,11 @@ impl Document {
                 None => break,
             }
         }
+
         None
     }
 
+    /// get identifier at point, only first part of nested idents
     pub fn get_ident_at_point(&self, point: Point) -> Option<String> {
         let node = self
             .ast
@@ -380,6 +377,7 @@ impl Document {
                         continue;
                     };
 
+                    // only request can contain multiline strings
                     if right_node.kind() == "string_list" && left_ident != "request" {
                         add_error!("Property {left_ident} cannot contain string list");
                     }
@@ -407,7 +405,7 @@ impl Document {
                             }
 
                             let Some(right_node_type) = node_to_type(&right_node) else {
-                                add_error!("Unexpected value");
+                                add_error!("Unexpected value"); // unrecognized type
                                 continue;
                             };
                             if !right_node_type.can_this_cast_into(r#type) {
@@ -450,17 +448,20 @@ impl Document {
                         }
                     }
                 }
+                // lint ident_call_expr (e.g. brotli.init(BOTH, br_q = 1))
                 "ident_call_expr" => {
                     let Some(ident_node) = node.child_by_field_name("ident") else {
                         continue;
                     };
                     let full_ident = get_node_text(&self.rope, &ident_node);
                     let ident_parts = full_ident.split('.').collect::<Vec<_>>();
+                    // check first part exists (e.g. «brotli»)
                     let Some(definition) = global_scope.get(ident_parts[0]) else {
                         add_error!("{} undefined", ident_parts[0]);
                         continue;
                     };
 
+                    // check it is defined above current line
                     if let Some(ref doc_nested_pos) = self.pos_from_main_doc {
                         let mut call_nested_pos = doc_nested_pos.clone();
                         call_nested_pos.push(point_to_tuple(node.start_position()));
@@ -488,11 +489,13 @@ impl Document {
                         }
                     }
 
+                    // check method exists (init of brotli.init())
                     let Some(Type::Func(func)) = global_scope.get_type_property_by_nested_idents(ident_parts) else {
                         add_error!("{full_ident} is not a method");
                         continue;
                     };
 
+                    // check required args are provided
                     let required_args = func
                         .args
                         .iter()
@@ -517,6 +520,7 @@ impl Document {
                         add_error!("{}", message);
                     }
 
+                    // check the arguments exists and that their provided type is correct
                     let mut arg_idx = 0;
                     for arg_node in arg_nodes {
                         let arg;
@@ -529,7 +533,7 @@ impl Document {
                             let Some(_arg) = func
                                 .args
                                 .iter()
-                                .find(|arg| arg.name.is_some() && arg.name.as_ref().unwrap().eq(arg_name.as_str())) else {
+                                .find(|arg| arg.name.as_ref().map(|name| name.eq(arg_name.as_str())).unwrap_or(false)) else {
                                 add_error!(node: arg_node, "No such argument named {arg_name}");
                                 continue;
                             };
@@ -548,6 +552,7 @@ impl Document {
 
                         match arg.r#type {
                             Some(Type::Enum(ref enum_values)) => {
+                                // validate enums
                                 if arg_value_node.kind() != "ident" {
                                     add_error!(node: arg_node, "Enum not found");
                                     continue;
@@ -564,6 +569,7 @@ impl Document {
                                 }
                             }
                             Some(ref arg_type) => {
+                                // check provided type can cast into argument type
                                 if let Some(arg_value_type) = node_to_type(&arg_value_node) {
                                     if !arg_value_type.can_this_cast_into(arg_type) {
                                         add_error!(
@@ -747,7 +753,6 @@ impl Document {
     pub fn get_all_definitions(&self, scope_with_vmods: &Definitions) -> Vec<Definition> {
         let q = Query::new(
             self.ast.language(),
-            // "[(toplev_declaration (_ (ident) @ident ) @node), (new_stmt (ident) @ident) @node]",
             r#"
             [
                 (toplev_declaration (_ (ident) @ident ) @node)
@@ -769,7 +774,6 @@ impl Document {
 
         let mut defs: Vec<Definition> = Vec::new();
         for each_match in all_matches {
-            // debug!("match: {:?}", each_match);
             let node_capture = each_match
                 .captures
                 .iter()
