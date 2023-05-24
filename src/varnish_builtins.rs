@@ -18,7 +18,6 @@ pub enum Type {
     Obj(Obj),
     Func(Func),
     Backend,
-    // Director,
     String,
     Number,
     Duration,
@@ -26,7 +25,6 @@ pub enum Type {
     Acl,
     Sub,
     Probe,
-    // UnresolvedNew, // hack
     Enum(Vec<String>),
     Blob,
     IP,
@@ -123,8 +121,6 @@ impl Definitions {
         idents: Vec<&str>,
         options: AutocompleteSearchOptions,
     ) -> Option<Vec<(&String, &Type)>> {
-        // let mut scope: &dyn HasTypeProperties = self;
-        // let mut scope: &AutocompleteScope = &self;
         let mut scope: &dyn HasTypeProperties = self;
         let (idents, [last_ident, ..]) = idents.split_at(idents.len() - 1) else {
             unreachable!("Failed to split identifier by period");
@@ -134,7 +130,6 @@ impl Definitions {
                  return None;
             };
             scope = obj;
-            // scope = &AutocompleteScope::Obj(obj);
         }
 
         Some(
@@ -144,9 +139,7 @@ impl Definitions {
                 .filter(|(_prop_name, property)| {
                     if let Some(ref search_type) = options.search_type {
                         scope_contains_type(property, search_type, true)
-                    } else if options.must_be_writable.is_some()
-                        && options.must_be_writable.unwrap()
-                    {
+                    } else if options.must_be_writable.unwrap_or(false) {
                         let is_writable = scope.obj().map_or(false, |obj| !obj.read_only);
                         is_writable || scope_contains_writable(property)
                     } else {

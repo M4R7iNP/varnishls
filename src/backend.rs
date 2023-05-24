@@ -77,6 +77,7 @@ impl Backend {
             }
         };
 
+        // gather all vmod imports, but only keep the first of each unique vmod
         let all_vmod_imports = documents_from_main_in_order
             .iter()
             .flat_map(|doc| doc.get_vmod_imports())
