@@ -2,7 +2,7 @@ use crate::{
     parser, static_autocomplete_items,
     varnish_builtins::{
         self, get_backend_field_types, get_probe_field_types, AutocompleteSearchOptions,
-        Definition, Definitions, Type,
+        Definition, Definitions, HasTypeProperties, Type,
     },
 };
 
@@ -402,6 +402,23 @@ impl Document {
                             add_error!("Backend property «{}» does not exist", left_ident);
                         }
                         Some(r#type) => {
+                            if right_node.kind() == "nested_ident" {
+                                let right_ident = get_node_text(&self.rope, &right_node);
+                                let Some(ident_type) = global_scope.get_type_property(&right_ident) else {
+                                    add_error!(node: right_node, "Undefined value");
+                                    continue;
+                                };
+                                if !ident_type.can_this_cast_into(r#type) {
+                                    add_error!(
+                                        node: right_node,
+                                        "Expected {}, found {}",
+                                        r#type,
+                                        ident_type
+                                    );
+                                }
+                                continue;
+                            }
+
                             let Some(right_node_type) = node_to_type(&right_node) else {
                                 add_error!("Unexpected value");
                                 continue;
