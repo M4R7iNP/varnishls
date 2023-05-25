@@ -19,8 +19,6 @@ jobs:
           - windows
           - macos
           - macos-arm-64
-          - linux-arm-64
-          - linux-arm-32
         include:
           - build: linux-musl
             os: ubuntu-latest
@@ -41,19 +39,7 @@ jobs:
             os: macos-11
             toolchain: nightly
             target: aarch64-apple-darwin
-            cross: true
-
-          - build: linux-arm-64
-            os: ubuntu-latest
-            toolchain: nightly
-            target: aarch64-unknown-linux-musl
-            cross: true
-
-          - build: linux-arm-32
-            os: ubuntu-latest
-            toolchain: nightly
-            target: arm-unknown-linux-musleabihf
-            cross: true
+            # cross: true
 
     steps:
       - name: install musl-tools if musl target
@@ -82,12 +68,12 @@ jobs:
             ${{ matrix.target }}-build-
             ${{ matrix.target }}-
 
-      - name: Install cross compiler
-        if: ${{ matrix.cross }}
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: cross
+      # - name: Install cross compiler
+      #   if: ${{ matrix.cross }}
+      #   uses: actions-rs/cargo@v1
+      #   with:
+      #     command: install
+      #     args: cross
 
       - name: Install tree-sitter-cli
         uses: actions-rs/cargo@v1
@@ -108,12 +94,12 @@ jobs:
         with:
           command: test
 
-      - name: Use cross instead of cargo for cross compilation
-        if: ${{ matrix.cross }}
-        run: cross build --release --target ${{ matrix.target }}
+      # - name: Use cross instead of cargo for cross compilation
+      #   if: ${{ matrix.cross }}
+      #   run: cross build --release --target ${{ matrix.target }}
 
       - uses: actions-rs/cargo@v1
-        if: ${{ !matrix.cross }}
+        # if: ${{ !matrix.cross }}
         with:
           command: build
           args: --release --target ${{ matrix.target }}
