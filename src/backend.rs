@@ -1,4 +1,3 @@
-use glob::{glob, GlobResult};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,25 +93,37 @@ impl Backend {
          * TODO: maybe read all vcc files at startup, cache them, and then lookup from here.
          * TODO: support pointing to singular vcc file or vmod src dir containing a vcc file
          */
-        let vcc_files: Vec<_> = all_vmod_imports
+        let vcc_files: Vec<PathBuf> = all_vmod_imports
             .values()
             .flat_map(|import| {
                 config
                     .vcc_paths
                     .iter()
-                    .flat_map(|vcc_path| -> Vec<GlobResult> {
-                        // glob(format!("{}/libvmod_{}/*.vcc", vcc_path, vmod_name))
-                        let mut glob_path = vcc_path.clone();
-                        glob_path.push(format!("libvmod_{}", import.name));
-                        glob_path.push("*.vcc");
-                        glob(glob_path.to_str().unwrap())
-                            .map(|paths| paths.collect::<Vec<GlobResult>>())
-                            .unwrap_or_else(|_| vec![])
+                    .find_map(|vcc_path| -> Option<PathBuf> {
+                        let vmod_name = &import.name;
+                        vec![
+                            vcc_path.join(format!("libvmod_{vmod_name}.vcc")),
+                            vcc_path
+                                .join(format!("libvmod_{vmod_name}"))
+                                .join("vmod.vcc"),
+                            vcc_path
+                                .join(format!("libvmod_{vmod_name}"))
+                                .join(format!("vmod_{vmod_name}.vcc")),
+                        ]
+                        .into_iter()
+                        .find(|path| {
+                            let path = Path::new(path);
+                            match path.try_exists() {
+                                Err(err) => {
+                                    error!("Could not check {} due to {}", path.display(), err);
+                                    false
+                                }
+                                Ok(exists) => exists,
+                            }
+                        })
                     })
-                    .collect::<Vec<_>>()
             })
-            .filter_map(|result| result.ok())
-            .collect::<Vec<_>>();
+            .collect();
 
         // parse each vcc file in their own thread.
         let mut set = tokio::task::JoinSet::new();
