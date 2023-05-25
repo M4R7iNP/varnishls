@@ -1,0 +1,137 @@
+# .github/workflows/release.yml
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, gh-actions]
+
+jobs:
+  build:
+    name: Build artifacts
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - linux-musl
+          - windows
+          - macos
+          - macos-arm-64
+          - linux-arm-64
+          - linux-arm-32
+        include:
+          - build: linux-musl
+            os: ubuntu-latest
+            toolchain: stable
+            target: x86_64-unknown-linux-musl
+
+          - build: windows
+            os: windows-latest
+            toolchain: stable
+            target: x86_64-pc-windows-msvc
+
+          - build: macos
+            os: macos-latest
+            toolchain: stable
+            target: x86_64-apple-darwin
+
+          - build: macos-arm-64
+            os: macos-11
+            toolchain: nightly
+            target: aarch64-apple-darwin
+            cross: true
+
+          - build: linux-arm-64
+            os: ubuntu-latest
+            toolchain: nightly
+            target: aarch64-unknown-linux-musl
+            cross: true
+
+          - build: linux-arm-32
+            os: ubuntu-latest
+            toolchain: nightly
+            target: arm-unknown-linux-musleabihf
+            cross: true
+
+    steps:
+      - name: install musl-tools if musl target
+        if: ${{ contains(matrix.target, 'musl') }}
+        run: sudo apt install musl-tools
+
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.toolchain }}
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Download cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/
+            target/
+          key: ${{ matrix.target }}-build-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-build-
+            ${{ matrix.target }}-
+
+      - name: Install cross compiler
+        if: ${{ matrix.cross }}
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: cross
+
+      - name: Install tree-sitter-cli
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: tree-sitter-cli
+
+      - name: Generate tree-sitter-vcl
+        working-directory: ./vendor/tree-sitter-vcl
+        run: tree-sitter generate
+
+      - name: Generate tree-sitter-vtc
+        working-directory: ./vendor/tree-sitter-vtc
+        run: tree-sitter generate
+
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+
+      - name: Use cross instead of cargo for cross compilation
+        if: ${{ matrix.cross }}
+        run: cross build --release --target ${{ matrix.target }}
+
+      - uses: actions-rs/cargo@v1
+        if: ${{ !matrix.cross }}
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+
+      - name: Compress compiled binary
+        if: ${{ !startsWith(matrix.os, 'windows') }}
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf elm-test-rs_${{ matrix.target }}.tar.gz elm-test-rs
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ !startsWith(matrix.os, 'windows') }}
+        with:
+          name: elm-test-rs_${{ matrix.target }}.tar.gz
+          path: target/${{ matrix.target }}/release/elm-test-rs_${{ matrix.target }}.tar.gz
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ startsWith(matrix.os, 'windows') }}
+        with:
+          name: elm-test-rs_${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/elm-test-rs.exe
