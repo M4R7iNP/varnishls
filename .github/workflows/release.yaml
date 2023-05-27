@@ -76,6 +76,7 @@ jobs:
           npx tree-sitter generate
 
       - name: Generate tree-sitter-vtc
+        working-directory: ./vendor/tree-sitter-vtc
         run: |
           npm ci
           npx tree-sitter generate
