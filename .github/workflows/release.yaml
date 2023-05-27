@@ -102,7 +102,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            target/${{ matrix.target }}/release/prosemd-lsp-${{ matrix.target }}${{ matrix.binary_postfix }}
-            target/${{ matrix.target }}/release/prosemd-lsp-${{ matrix.target }}${{ matrix.binary_postfix }}.sha256
+            target/${{ matrix.target }}/release/varnishls-${{ matrix.target }}${{ matrix.binary_postfix }}
+            target/${{ matrix.target }}/release/varnishls-${{ matrix.target }}${{ matrix.binary_postfix }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
