@@ -59,7 +59,7 @@ jobs:
           override: true
 
       - name: Download cache
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: |
             ~/.cargo/
@@ -81,10 +81,8 @@ jobs:
           npm ci
           npx tree-sitter generate
 
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Packaging final binary
         shell: bash
