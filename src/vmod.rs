@@ -268,27 +268,29 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
-    let json = unsafe { CStr::from_ptr((file[(vmd.json as usize)..].as_ptr()) as *const i8) }
+    let json = unsafe { CStr::from_ptr(file[(vmd.json as usize)..].as_ptr() as *const c_char) }
         .to_string_lossy();
 
     let vmod_json_data = parse_vmod_json(&json)?;
     return Ok(VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
-        name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const i8) }
+        name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
             .to_string_lossy()
             .to_string(),
-        file_id: unsafe { CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const i8) }
-            .to_string_lossy()
-            .to_string(),
-        func: unsafe { CStr::from_ptr((file[(vmd.func as usize)..].as_ptr()) as *const i8) }
+        file_id: unsafe {
+            CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const c_char)
+        }
+        .to_string_lossy()
+        .to_string(),
+        func: unsafe { CStr::from_ptr((file[(vmd.func as usize)..].as_ptr()) as *const c_char) }
             .to_string_lossy()
             .to_string(),
         func_len: vmd.func_len as usize,
-        proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const i8) }
+        proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const c_char) }
             .to_string_lossy()
             .to_string(),
-        abi: unsafe { CStr::from_ptr((file[(vmd.abi as usize)..].as_ptr()) as *const i8) }
+        abi: unsafe { CStr::from_ptr((file[(vmd.abi as usize)..].as_ptr()) as *const c_char) }
             .to_string_lossy()
             .to_string(),
         json: json.to_string(),
