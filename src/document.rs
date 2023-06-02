@@ -307,23 +307,34 @@ impl Document {
 
             let node = cursor.node();
             macro_rules! add_error {
-                (range: $range:expr, $($arg:tt)+) => {
+                (range: $range:expr, severity: $severity:expr, $($arg:tt)+) => {
                     error_ranges.push(LintError {
                         message: format!($($arg)+),
                         loc: Location {
                             uri: self.url.to_owned(),
                             range: $range,
                         },
-                        severity: DiagnosticSeverity::ERROR,
+                        severity: $severity,
                     });
                 };
                 (node: $node:expr, $($arg:tt)+) => {
                     let range = ts_range_to_lsp_range($node.range());
-                    add_error!(range: range, $($arg)+);
+                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 };
                 ($($arg:tt)+) => {
                     let range = ts_range_to_lsp_range(node.range());
-                    add_error!(range: range, $($arg)+);
+                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                }
+            }
+
+            macro_rules! add_warning {
+                (node: $node:expr, $($arg:tt)+) => {
+                    let range = ts_range_to_lsp_range($node.range());
+                    add_error!(range: range, severity: DiagnosticSeverity::WARNING, $($arg)+);
+                };
+                ($($arg:tt)+) => {
+                    let range = ts_range_to_lsp_range(node.range());
+                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 }
             }
 
@@ -341,16 +352,42 @@ impl Document {
 
             match node.kind() {
                 "set_stmt" => {
-                    let left = node.child_by_field_name("left");
-                    if left.is_none() {
+                    let Some(left) = node.child_by_field_name("left") else {
                         add_error!("Missing set property");
                         continue;
-                    }
+                    };
 
-                    let right = node.child_by_field_name("right");
-                    if right.is_none() {
+                    let Some(_right) = node.child_by_field_name("right") else {
                         add_error!("Missing set value");
                         continue;
+                    };
+
+                    let left_ident_text = {
+                        if matches!(left.kind(), "ident" | "nested_ident") {
+                            get_node_text(&self.rope, &left).to_lowercase()
+                        } else {
+                            continue;
+                        }
+                    };
+
+                    let left_parts = left_ident_text.split('.').collect::<Vec<_>>();
+                    if vec!["req", "bereq", "resp", "beresp"].contains(&left_parts[0])
+                        && matches!(left_parts.get(1), Some(&"http"))
+                        && matches!(
+                            left_parts.get(2),
+                            Some(&"content-dpr")
+                                | Some(&"dnt")
+                                | Some(&"dpr")
+                                | Some(&"large-allocation")
+                                | Some(&"pragma")
+                                | Some(&"sec-ch-ua-full-version")
+                                | Some(&"tk")
+                                | Some(&"viewport-width")
+                                | Some(&"width")
+                        )
+                    {
+                        let hdr = left_parts[2];
+                        add_warning!(node: left, "Deprecated header {hdr}");
                     }
                 }
                 "new_stmt" => {
@@ -812,14 +849,11 @@ impl Document {
                         .find(|c| c.index == def_ident_capt_idx)
                         .unwrap();
                     let def_text = get_node_text(&self.rope, &def_ident_capture.node);
-                    let r#type = scope_with_vmods
-                        .get_type_property_by_nested_idents(def_text.split('.').collect());
-
-                    if r#type.is_none() {
+                    let Some(r#type) = scope_with_vmods
+                        .get_type_property_by_nested_idents(def_text.split('.').collect()) else {
                         continue;
-                    }
+                    };
 
-                    let r#type = r#type.unwrap();
                     let mut r#type_box = Box::new(r#type.to_owned());
 
                     if let Type::Func(func) = r#type {
@@ -1185,6 +1219,14 @@ impl<'a> TextProvider<'a> for &'a Document {
         }
     }
 }
+
+impl PartialEq for VmodImport {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for VmodImport {}
 
 // Misc helper functions
 

@@ -72,9 +72,15 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
                 "HEADER" => Some(Type::Obj(Default::default())), // for now
                 "ENUM" => {
                     let enum_values = match arg_arr.get(3) {
-                        Some(SerdeValue::Array(values)) => {
-                            Some(values.iter().map(|str| str.to_string()).collect::<Vec<_>>())
-                        }
+                        Some(SerdeValue::Array(values)) => Some(
+                            values
+                                .iter()
+                                .filter_map(|val| match val {
+                                    SerdeValue::String(str) => Some(str.to_string()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
                         _ => None,
                     }?;
                     Some(Type::Enum(enum_values))

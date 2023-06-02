@@ -1,12 +1,10 @@
 use log::{debug, error};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use toml;
 use tower_lsp::jsonrpc::{Error, Result};
-use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
@@ -534,74 +532,6 @@ impl LanguageServer for Backend {
         Ok(Some(refs))
     }
 
-    /*
-    async fn inlay_hint(
-        &self,
-        params: tower_lsp::lsp_types::InlayHintParams,
-    ) -> Result<Option<Vec<InlayHint>>> {
-        self.client
-            .log_message(MessageType::INFO, "inlay hint")
-            .await;
-        let uri = &params.text_document.uri;
-        let mut hashmap = HashMap::new();
-        if let Some(ast) = self.ast_map.get(uri.as_str()) {
-            ast.iter().for_each(|(_, v)| {
-                type_inference(&v.body, &mut hashmap);
-            });
-        }
-
-        let document = match self.document_map.get(uri.as_str()) {
-            Some(rope) => rope,
-            None => return Ok(None),
-        };
-        let inlay_hint_list = hashmap
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    k.start,
-                    k.end,
-                    match v {
-                        nrs_language_server::chumsky::Value::Null => "null".to_string(),
-                        nrs_language_server::chumsky::Value::Bool(_) => "bool".to_string(),
-                        nrs_language_server::chumsky::Value::Num(_) => "number".to_string(),
-                        nrs_language_server::chumsky::Value::Str(_) => "string".to_string(),
-                        nrs_language_server::chumsky::Value::List(_) => "[]".to_string(),
-                        nrs_language_server::chumsky::Value::Func(_) => v.to_string(),
-                    },
-                )
-            })
-            .filter_map(|item| {
-                // let start_position = offset_to_position(item.0, document)?;
-                let end_position = offset_to_position(item.1, &document)?;
-                let inlay_hint = InlayHint {
-                    text_edits: None,
-                    tooltip: None,
-                    kind: Some(InlayHintKind::TYPE),
-                    padding_left: None,
-                    padding_right: None,
-                    data: None,
-                    position: end_position,
-                    label: InlayHintLabel::LabelParts(vec![InlayHintLabelPart {
-                        value: item.2,
-                        tooltip: None,
-                        location: Some(Location {
-                            uri: params.text_document.uri.clone(),
-                            range: Range {
-                                start: Position::new(0, 4),
-                                end: Position::new(0, 5),
-                            },
-                        }),
-                        command: None,
-                    }]),
-                };
-                Some(inlay_hint)
-            })
-            .collect::<Vec<_>>();
-
-        Ok(Some(inlay_hint_list))
-    }
-    */
-
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
@@ -677,7 +607,7 @@ impl LanguageServer for Backend {
                         func.get_signature_string(),
                         func.doc
                             .map(|doc| format!("\n\n{doc}"))
-                            .unwrap_or_else(|| "".to_string())
+                            .unwrap_or_default()
                     ),
                 }),
                 range: None,
@@ -762,15 +692,4 @@ fn get_all_documents<'a>(
         .collect();
     docs.append(&mut includes);
     docs
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct InlayHintParams {
-    path: String,
-}
-
-enum CustomNotification {}
-impl Notification for CustomNotification {
-    type Params = InlayHintParams;
-    const METHOD: &'static str = "custom/notification";
 }
