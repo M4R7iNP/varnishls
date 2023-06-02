@@ -10,7 +10,7 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{Document, Include, NestedPos};
+use crate::document::{Document, Include, NestedPos, LEGEND_TYPE};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -23,7 +23,6 @@ pub struct Backend {
     // pub root_path: Option<String>,
     pub root_uri: RwLock<Option<Url>>,
     pub config: RwLock<Config>,
-    // semantic_token_map: DashMap<String, Vec<ImCompleteSemanticToken>>,
 }
 
 impl Backend {
@@ -354,7 +353,30 @@ impl LanguageServer for Backend {
                     }),
                     file_operations: None,
                 }),
-                semantic_tokens_provider: None,
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(
+                        SemanticTokensRegistrationOptions {
+                            text_document_registration_options: TextDocumentRegistrationOptions {
+                                document_selector: Some(vec![DocumentFilter {
+                                    language: Some("vcl".to_string()),
+                                    scheme: Some("file".to_string()),
+                                    pattern: None,
+                                }]),
+                            },
+                            semantic_tokens_options: SemanticTokensOptions {
+                                work_done_progress_options: Default::default(),
+                                legend: SemanticTokensLegend {
+                                    token_types: LEGEND_TYPE.into(),
+                                    token_modifiers: vec![],
+                                },
+                                range: Some(true),
+                                // full: Some(SemanticTokensFullOptions::Bool(true)),
+                                full: Some(SemanticTokensFullOptions::Bool(true)),
+                            },
+                            static_registration_options: StaticRegistrationOptions::default(),
+                        },
+                    ),
+                ),
                 // definition: Some(GotoCapability::default()),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
@@ -605,9 +627,7 @@ impl LanguageServer for Backend {
                             .unwrap_or_else(|| "VOID".to_string()),
                         func.name,
                         func.get_signature_string(),
-                        func.doc
-                            .map(|doc| format!("\n\n{doc}"))
-                            .unwrap_or_default()
+                        func.doc.map(|doc| format!("\n\n{doc}")).unwrap_or_default()
                     ),
                 }),
                 range: None,
@@ -621,6 +641,36 @@ impl LanguageServer for Backend {
             }),
             range: None,
         }))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        debug!("semantic_tokens_full()");
+        let start = std::time::Instant::now();
+        let uri = params.text_document.uri;
+        let doc_map = self.document_map.read().await;
+        let Some(doc) = doc_map.get(&uri) else {
+            // TODO: error
+            return Ok(None);
+        };
+
+        // let range = params.range;
+        let semantic_tokens = doc.get_semantic_tokens();
+        let Some(semantic_token) = semantic_tokens else {
+            return Ok(None);
+        };
+
+        debug!(
+            "semantic_tokens_full() done in {}ms",
+            start.elapsed().as_millis()
+        );
+
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data: semantic_token,
+        })))
     }
 
     async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {

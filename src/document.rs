@@ -66,6 +66,19 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
 ];
 
+pub const LEGEND_TYPE: &[SemanticTokenType] = &[
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::VARIABLE,
+    SemanticTokenType::STRING,
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::REGEXP,
+    SemanticTokenType::NUMBER,
+];
+
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
     let mut text = rope.byte_slice(node.byte_range()).to_string();
     if let Some((first_part, _)) = text.split_once('\n') {
@@ -724,8 +737,7 @@ impl Document {
     }
 
     pub fn get_vmod_imports(&self) -> Vec<VmodImport> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(import_declaration (ident) @ident)").unwrap();
+        let q = Query::new(self.ast.language(), "(import_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
@@ -755,8 +767,11 @@ impl Document {
     }
 
     pub fn get_includes(&self, nested_pos: &NestedPos) -> Vec<Include> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(include_declaration (string) @string)").unwrap();
+        let q = Query::new(
+            self.ast.language(),
+            "(include_declaration (string) @string)",
+        )
+        .unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("string").unwrap();
@@ -781,8 +796,7 @@ impl Document {
     }
 
     pub fn get_subroutines(&self) -> Vec<String> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(sub_declaration (ident) @ident)").unwrap();
+        let q = Query::new(self.ast.language(), "(sub_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
@@ -1196,6 +1210,100 @@ impl Document {
         suggestions.append(&mut keyword_suggestions);
 
         Some(suggestions)
+    }
+
+    pub fn get_semantic_tokens(&self) -> Option<Vec<SemanticToken>> {
+        let node = self.ast.root_node();
+        let q = Query::new(self.ast.language(),
+            r#"
+[ "acl" "sub" "backend" "probe" "vcl" "else" "elsif" "elseif" "if" "return" "import" "include" "set" "unset" "new" "call" ] @keyword
+[ "hit" "miss" "pass" "pipe" "retry" "restart" "fail" "synth" "hash" "deliver" "abandon" "lookup" ] @keyword
+
+(operator) @operator
+"=" @operator
+"!" @operator
+
+
+(string) @string
+(number) @number
+; (float) @number
+(duration) @number
+(bytes) @number
+(bool) @number
+
+(ident) @variable
+(nested_ident) @variable
+
+(binary_expression
+  operator: (operator (rmatch))
+  right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
+
+(func_call_named_arg
+   arg_name: (ident) @parameter)
+
+(COMMENT) @comment
+            "#
+        ).unwrap();
+        let mut qc = QueryCursor::new();
+        let all_matches = qc.matches(&q, node, self);
+
+        let names = q.capture_names();
+
+        struct Token {
+            start: usize,
+            line: usize,
+            char: usize,
+            length: usize,
+            token_type: usize,
+        }
+
+        let mut tokens = vec![];
+        for m in all_matches {
+            for c in m.captures {
+                let node = c.node;
+                let range = node.range();
+                let name = names.get(c.index as usize).unwrap();
+                let Some(token_type) = LEGEND_TYPE.iter().position(|s| s.as_str() == name) else {
+                    continue;
+                };
+                tokens.push(Token {
+                    start: self.rope.byte_to_char(range.start_byte),
+                    line: range.start_point.row,
+                    char: range.start_point.column,
+                    length: range.end_byte - range.start_byte,
+                    token_type,
+                })
+            }
+        }
+
+        tokens.sort_by(|a, b| a.start.cmp(&b.start));
+
+        let mut prev_line = 0;
+        let mut prev_char = 0;
+        let semantic_tokens = tokens
+            .iter()
+            .map(|tok| {
+                let delta_line = tok.line - prev_line;
+                let delta_char = if delta_line == 0 {
+                    tok.char - prev_char
+                } else {
+                    tok.char
+                };
+                let semtok = SemanticToken {
+                    delta_start: delta_char as u32,
+                    delta_line: delta_line as u32,
+                    length: tok.length as u32,
+                    token_type: tok.token_type as u32,
+                    token_modifiers_bitset: 0,
+                };
+
+                prev_line = tok.line;
+                prev_char = tok.char;
+                semtok
+            })
+            .collect::<Vec<_>>();
+
+        return Some(semantic_tokens);
     }
 }
 
