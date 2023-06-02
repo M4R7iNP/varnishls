@@ -369,8 +369,7 @@ impl LanguageServer for Backend {
                                     token_types: LEGEND_TYPE.into(),
                                     token_modifiers: vec![],
                                 },
-                                range: Some(true),
-                                // full: Some(SemanticTokensFullOptions::Bool(true)),
+                                range: Some(false),
                                 full: Some(SemanticTokensFullOptions::Bool(true)),
                             },
                             static_registration_options: StaticRegistrationOptions::default(),
@@ -652,15 +651,11 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let doc_map = self.document_map.read().await;
         let Some(doc) = doc_map.get(&uri) else {
-            // TODO: error
-            return Ok(None);
+            error!("Could not find document");
+            return Err(Error::internal_error());
         };
 
-        // let range = params.range;
         let semantic_tokens = doc.get_semantic_tokens();
-        let Some(semantic_token) = semantic_tokens else {
-            return Ok(None);
-        };
 
         debug!(
             "semantic_tokens_full() done in {}ms",
@@ -669,7 +664,7 @@ impl LanguageServer for Backend {
 
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
-            data: semantic_token,
+            data: semantic_tokens,
         })))
     }
 

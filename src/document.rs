@@ -1212,7 +1212,7 @@ impl Document {
         Some(suggestions)
     }
 
-    pub fn get_semantic_tokens(&self) -> Option<Vec<SemanticToken>> {
+    pub fn get_semantic_tokens(&self) -> Vec<SemanticToken> {
         let node = self.ast.root_node();
         let q = Query::new(self.ast.language(),
             r#"
@@ -1303,7 +1303,7 @@ impl Document {
             })
             .collect::<Vec<_>>();
 
-        return Some(semantic_tokens);
+        semantic_tokens
     }
 }
 
