@@ -129,21 +129,32 @@ impl Document {
     fn edit_range(&mut self, _version: i32, range: Range, text: String) {
         let mut new_ast = self.ast.clone();
 
-        let old_end_position_point = Point {
-            row: range.end.line as usize,
-            column: range.end.character as usize,
-        };
-
-        let start_col = self
+        let start_char = self
             .rope
             .line(range.start.line as usize)
             .utf16_cu_to_char(range.start.character as usize);
-        let end_col = self
+        let old_end_char = self
             .rope
-            .line(range.end.line as usize)
-            .utf16_cu_to_char(range.end.character as usize);
-        let start = self.rope.line_to_char(range.start.line as usize) + start_col;
-        let end = self.rope.line_to_char(range.end.line as usize) + end_col;
+            .get_line(range.end.line as usize)
+            .map(|line| line.utf16_cu_to_char(range.end.character as usize))
+            .unwrap_or_else(|| {
+                // Edge case: fix for one-past-the-end line.
+                let len_lines = self.rope.len_lines();
+                if range.end.character == 0 && (range.end.line as usize) == len_lines {
+                    return 0;
+                }
+                // trigger the error if it is way beyond
+                self.rope.line(range.end.line as usize);
+                unreachable!();
+            });
+
+        let old_end_position = Point {
+            row: range.end.line as usize,
+            column: old_end_char,
+        };
+
+        let start = self.rope.line_to_char(range.start.line as usize) + start_char;
+        let end = self.rope.line_to_char(range.end.line as usize) + old_end_char;
         let old_end_byte = self.rope.char_to_byte(end);
         self.rope.remove(start..end);
         self.rope.insert(start, text.as_str());
@@ -152,7 +163,7 @@ impl Document {
         let new_end_line = self.rope.byte_to_line(new_end_byte);
         let new_end_col =
             self.rope.byte_to_char(new_end_byte) - self.rope.line_to_char(new_end_line);
-        let new_end_position_point = Point {
+        let new_end_position = Point {
             row: new_end_line,
             column: new_end_col,
         };
@@ -165,8 +176,8 @@ impl Document {
                 row: range.start.line as usize,
                 column: range.start.character as usize,
             },
-            old_end_position: old_end_position_point,
-            new_end_position: new_end_position_point,
+            old_end_position,
+            new_end_position,
         });
 
         let new_new_ast = self
@@ -1569,5 +1580,79 @@ backend my_backend {
         defs.properties.append(&mut map);
         let errors = doc.diagnostics(defs);
         assert_eq!(errors.len(), 0, "Should produce no errors");
+    }
+
+    #[test]
+    fn replace_document_edge_case() {
+        let mut doc = Document::new(
+            Url::parse("file:///test.vcl").unwrap(),
+            "\n".to_string(),
+            None,
+        );
+
+        // insert second newline
+        doc.edit_range(
+            1,
+            Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
+            },
+            "\n".to_string(),
+        );
+        // insert third newline
+        doc.edit_range(
+            2,
+            Range {
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            "\n".to_string(),
+        );
+
+        // now, delete everything
+        doc.edit_range(
+            3,
+            Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 3,
+                    character: 0,
+                },
+            },
+            "".to_string(),
+        );
+
+        // now, our state is empty, but the editor probably has an empty newline
+
+        // insert new newlines, spanning the newline the editor has, but we don't
+        doc.edit_range(
+            4,
+            Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 1,
+                    character: 0,
+                },
+            },
+            "\n\n".to_string(),
+        );
     }
 }
