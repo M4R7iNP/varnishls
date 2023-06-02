@@ -1,6 +1,7 @@
 [package]
 name = "varnishls"
 version = "0.1.0"
+license = "LGPL-3.0-or-later"
 edition = "2021"
 authors = ["martin@m4r7.in"]
 keywords = ["lsp", "language-server", "varnish"]
