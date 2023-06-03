@@ -66,17 +66,18 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
 ];
 
-pub const LEGEND_TYPE: &[SemanticTokenType] = &[
-    SemanticTokenType::FUNCTION,
+pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::VARIABLE,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::KEYWORD,
     SemanticTokenType::STRING,
     SemanticTokenType::COMMENT,
     SemanticTokenType::NUMBER,
-    SemanticTokenType::KEYWORD,
     SemanticTokenType::OPERATOR,
     SemanticTokenType::PARAMETER,
     SemanticTokenType::REGEXP,
     SemanticTokenType::NUMBER,
+    // SemanticTokenType::new("delimiter"),
 ];
 
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
@@ -142,10 +143,13 @@ impl Document {
     fn edit_range(&mut self, _version: i32, range: Range, text: String) {
         let mut new_ast = self.ast.clone();
 
-        let start_char = self
-            .rope
-            .line(range.start.line as usize)
-            .utf16_cu_to_char(range.start.character as usize);
+        let start_line = self.rope.line(range.start.line as usize);
+        let start_char = start_line.utf16_cu_to_char(range.start.character as usize);
+        let start_position = Point {
+            row: range.start.line as usize,
+            column: start_line.char_to_byte(start_char),
+        };
+
         let old_end_char = self
             .rope
             .get_line(range.end.line as usize)
@@ -161,34 +165,31 @@ impl Document {
                 unreachable!();
             });
 
-        let old_end_position = Point {
-            row: range.end.line as usize,
-            column: old_end_char,
-        };
-
         let start = self.rope.line_to_char(range.start.line as usize) + start_char;
         let end = self.rope.line_to_char(range.end.line as usize) + old_end_char;
+
+        let old_end_position = Point {
+            row: range.end.line as usize,
+            column: self.rope.char_to_byte(end) - self.rope.line_to_byte(range.end.line as usize),
+        };
+
         let old_end_byte = self.rope.char_to_byte(end);
         self.rope.remove(start..end);
         self.rope.insert(start, text.as_str());
         let start_byte = self.rope.char_to_byte(start);
-        let new_end_byte = start_byte + text.as_bytes().len();
+        let new_end_byte = start_byte + text.len();
         let new_end_line = self.rope.byte_to_line(new_end_byte);
-        let new_end_col =
-            self.rope.byte_to_char(new_end_byte) - self.rope.line_to_char(new_end_line);
+
         let new_end_position = Point {
             row: new_end_line,
-            column: new_end_col,
+            column: new_end_byte - self.rope.line_to_byte(new_end_line),
         };
 
         new_ast.edit(&InputEdit {
             start_byte,
             old_end_byte,
             new_end_byte,
-            start_position: Point {
-                row: range.start.line as usize,
-                column: range.start.character as usize,
-            },
+            start_position,
             old_end_position,
             new_end_position,
         });
@@ -1222,6 +1223,7 @@ impl Document {
 (operator) @operator
 "=" @operator
 "!" @operator
+; [ "(" ")" ";"] @delimiter
 
 
 (string) @string
@@ -1238,6 +1240,12 @@ impl Document {
   operator: (operator (rmatch))
   right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
 
+(ident_call_expr
+  ident: (nested_ident) @function)
+
+(ident_call_expr
+  ident: (ident) @keyword (#match? @keyword "^regsub|regsuball|hash_data|synthetic|ban$"))
+
 (func_call_named_arg
    arg_name: (ident) @parameter)
 
@@ -1249,12 +1257,12 @@ impl Document {
 
         let names = q.capture_names();
 
+        #[derive(Eq, PartialEq, PartialOrd, Ord)]
         struct Token {
-            start: usize,
             line: usize,
-            char: usize,
+            start: usize,
+            token_type: usize, // LEGEND_TYPES is ordered, so we can order by this for precendence
             length: usize,
-            token_type: usize,
         }
 
         let mut tokens = vec![];
@@ -1263,34 +1271,50 @@ impl Document {
                 let node = c.node;
                 let range = node.range();
                 let name = names.get(c.index as usize).unwrap();
-                let Some(token_type) = LEGEND_TYPE.iter().position(|s| s.as_str() == name) else {
+                let Some(token_type) = LEGEND_TYPES.iter().position(|s| s.as_str() == name) else {
                     continue;
                 };
-                tokens.push(Token {
-                    start: self.rope.byte_to_char(range.start_byte),
-                    line: range.start_point.row,
-                    char: range.start_point.column,
-                    length: range.end_byte - range.start_byte,
-                    token_type,
-                })
+                for row in range.start_point.row..=range.end_point.row {
+                    let start = if row == range.start_point.row {
+                        let start_line = self.rope.line(row);
+                        start_line
+                            .char_to_utf16_cu(start_line.byte_to_char(range.start_point.column))
+                    } else {
+                        0
+                    };
+
+                    let end_line = self.rope.line(row);
+                    let end = if row == range.end_point.row {
+                        end_line.char_to_utf16_cu(end_line.byte_to_char(range.end_point.column))
+                    } else {
+                        end_line.len_utf16_cu()
+                    };
+
+                    tokens.push(Token {
+                        start,
+                        line: row,
+                        length: end - start,
+                        token_type,
+                    })
+                }
             }
         }
 
-        tokens.sort_by(|a, b| a.start.cmp(&b.start));
+        tokens.sort();
 
         let mut prev_line = 0;
-        let mut prev_char = 0;
+        let mut prev_start = 0;
         let semantic_tokens = tokens
             .iter()
             .map(|tok| {
                 let delta_line = tok.line - prev_line;
-                let delta_char = if delta_line == 0 {
-                    tok.char - prev_char
+                let delta_start = if delta_line == 0 {
+                    tok.start - prev_start
                 } else {
-                    tok.char
+                    tok.start
                 };
                 let semtok = SemanticToken {
-                    delta_start: delta_char as u32,
+                    delta_start: delta_start as u32,
                     delta_line: delta_line as u32,
                     length: tok.length as u32,
                     token_type: tok.token_type as u32,
@@ -1298,7 +1322,7 @@ impl Document {
                 };
 
                 prev_line = tok.line;
-                prev_char = tok.char;
+                prev_start = tok.start;
                 semtok
             })
             .collect::<Vec<_>>();

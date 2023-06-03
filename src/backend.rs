@@ -10,7 +10,7 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{Document, Include, NestedPos, LEGEND_TYPE};
+use crate::document::{Document, Include, NestedPos, LEGEND_TYPES};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -366,7 +366,7 @@ impl LanguageServer for Backend {
                             semantic_tokens_options: SemanticTokensOptions {
                                 work_done_progress_options: Default::default(),
                                 legend: SemanticTokensLegend {
-                                    token_types: LEGEND_TYPE.into(),
+                                    token_types: LEGEND_TYPES.into(),
                                     token_modifiers: vec![],
                                 },
                                 range: Some(false),
