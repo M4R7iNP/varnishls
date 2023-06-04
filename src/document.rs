@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
+const VCL_QUERY: &str = include_str!("../vendor/tree-sitter-vcl/queries/semantic_tokens.scm");
+const VTC_QUERY: &str = include_str!("../vendor/tree-sitter-vtc/queries/highlights.scm"); // TODO:
+
 #[derive(Clone, Copy)]
 pub enum FileType {
     Vcl,
@@ -118,7 +121,7 @@ impl Document {
             parser,
             ast,
             url,
-            filetype: FileType::Vcl,
+            filetype,
             pos_from_main_doc: nested_pos,
         }
     }
@@ -1215,43 +1218,11 @@ impl Document {
 
     pub fn get_semantic_tokens(&self) -> Vec<SemanticToken> {
         let node = self.ast.root_node();
-        let q = Query::new(self.ast.language(),
-            r#"
-[ "acl" "sub" "backend" "probe" "vcl" "else" "elsif" "elseif" "if" "return" "import" "include" "set" "unset" "new" "call" ] @keyword
-[ "hit" "miss" "pass" "pipe" "retry" "restart" "fail" "synth" "hash" "deliver" "abandon" "lookup" ] @keyword
-
-(operator) @operator
-"=" @operator
-"!" @operator
-; [ "(" ")" ";"] @delimiter
-
-
-(string) @string
-(number) @number
-; (float) @number
-(duration) @number
-(bytes) @number
-(bool) @number
-
-(ident) @variable
-(nested_ident) @variable
-
-(binary_expression
-  operator: (operator (rmatch))
-  right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
-
-(ident_call_expr
-  ident: (nested_ident) @function)
-
-(ident_call_expr
-  ident: (ident) @keyword (#match? @keyword "^regsub|regsuball|hash_data|synthetic|ban$"))
-
-(func_call_named_arg
-   arg_name: (ident) @parameter)
-
-(COMMENT) @comment
-            "#
-        ).unwrap();
+        let mut query_str = VCL_QUERY.to_string();
+        if matches!(self.filetype, FileType::Vtc) {
+            query_str.push_str(VTC_QUERY);
+        }
+        let q = Query::new(self.ast.language(), query_str.as_str()).unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, node, self);
 

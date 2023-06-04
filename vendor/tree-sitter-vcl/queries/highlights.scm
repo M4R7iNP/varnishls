@@ -1,3 +1,4 @@
+; nvim-treesitter highlights
 [
   "acl"
   "sub"
