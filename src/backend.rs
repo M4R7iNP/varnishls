@@ -10,10 +10,17 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{Document, Include, NestedPos};
+use crate::document::{Document, Include, NestedPos, VmodImport};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
+
+#[derive(Debug, Default)]
+pub struct CacheEntry {
+    includes: Option<Vec<Include>>,
+    vmod_imports: Option<Vec<VmodImport>>,
+    definitions: Option<Vec<Definition>>,
+}
 
 pub struct Backend {
     pub client: Client,
@@ -23,6 +30,7 @@ pub struct Backend {
     // pub root_path: Option<String>,
     pub root_uri: RwLock<Option<Url>>,
     pub config: RwLock<Config>,
+    pub cache: RwLock<HashMap<Url, CacheEntry>>,
     // semantic_token_map: DashMap<String, Vec<ImCompleteSemanticToken>>,
 }
 
@@ -33,6 +41,7 @@ impl Backend {
             document_map: Default::default(),
             root_uri: Default::default(),
             config: Default::default(),
+            cache: Default::default(),
         }
     }
 
@@ -50,6 +59,7 @@ impl Backend {
         let doc_map = self.document_map.read().await;
         let root_uri = self.root_uri.read().await;
         let mut definitions = get_varnish_builtins();
+        let mut cache = self.cache.write().await;
 
         let documents_from_main_in_order = {
             if let Some(ref main_vcl_path) = config.main_vcl {
@@ -65,7 +75,7 @@ impl Backend {
                     .unwrap()
                     .to_string_lossy()
                     .to_string();
-                get_all_documents(&doc_map, &root_uri, &main_vcl_path, &vec![])
+                get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_path, &vec![])
             } else {
                 doc_map
                     .get(src_doc_url)
@@ -77,116 +87,36 @@ impl Backend {
         // gather all vmod imports, but only keep the first of each unique vmod
         let all_vmod_imports = documents_from_main_in_order
             .iter()
-            .flat_map(|doc| doc.get_vmod_imports())
-            .fold(HashMap::new(), |mut map, import| {
-                if !map.contains_key(&import.name) {
-                    map.insert(import.name.clone(), import);
+            .flat_map(|doc| {
+                let mut cache_entry = cache.entry(doc.url.clone()).or_insert_with(CacheEntry::default);
+                if cache_entry.vmod_imports.is_none() {
+                    cache_entry.vmod_imports = Some(doc.get_vmod_imports());
                 }
-                map
+                cache_entry.vmod_imports.clone().unwrap()
+            })
+            .fold(vec![], |mut set, import| {
+                if !set.contains(&import) {
+                    set.push(import);
+                }
+                set
             });
 
-        /*
-         * read all vcc files by glob (expects e.g. "{vcc_files_dir}/libvmod_std/vmod.vcc")
-         *
-         * TODO: maybe read all vcc files at startup, cache them, and then lookup from here.
-         * TODO: support pointing to singular vcc file or vmod src dir containing a vcc file
-         */
-        let vcc_files: Vec<PathBuf> = all_vmod_imports
-            .values()
-            .flat_map(|import| {
-                config
-                    .vcc_paths
-                    .iter()
-                    .find_map(|vcc_path| -> Option<PathBuf> {
-                        let vmod_name = &import.name;
-                        vec![
-                            vcc_path.join(format!("libvmod_{vmod_name}.vcc")),
-                            vcc_path
-                                .join(format!("libvmod_{vmod_name}"))
-                                .join("vmod.vcc"),
-                            vcc_path
-                                .join(format!("libvmod_{vmod_name}"))
-                                .join(format!("vmod_{vmod_name}.vcc")),
-                        ]
-                        .into_iter()
-                        .find(|path| {
-                            let path = Path::new(path);
-                            match path.try_exists() {
-                                Err(err) => {
-                                    error!("Could not check {} due to {}", path.display(), err);
-                                    false
-                                }
-                                Ok(exists) => exists,
-                            }
-                        })
-                    })
-            })
-            .collect();
-
-        // parse each vcc file in their own thread.
-        let mut set = tokio::task::JoinSet::new();
-        for vcc_file_path in vcc_files {
-            set.spawn(async move { parse_vcc_file_by_path(&vcc_file_path) });
-        }
-
-        while let Some(result) = set.join_next().await {
-            let result = result
-                .map_err(Box::<dyn std::error::Error + Send + Sync>::from) // map JoinError into generic error
-                .and_then(|result| result); // replace with result from parse_vcc_file_by_path
-
-            match result {
-                Err(err) => {
-                    self.emit_error(err.to_string()).await;
-                }
-                Ok(vmod_scope) => {
-                    let vmod_name = match vmod_scope {
-                        Type::Obj(ref obj) => obj.name.clone(),
-                        _ => unreachable!(),
-                    };
-                    let import = all_vmod_imports.get(&vmod_name);
-                    let def = Definition {
-                        ident_str: vmod_name.clone(),
-                        r#type: Box::new(vmod_scope),
-                        loc: import.map(|import| import.loc.clone()),
-                        nested_pos: import.and_then(|import| import.nested_pos.clone()),
-                    };
-                    definitions.properties.insert(vmod_name, def);
-                }
-            }
-        }
+        // debug!("all_vmod_imports: {all_vmod_imports:?}");
 
         // read all vmods
-        let vmod_futures = all_vmod_imports
-            .keys()
-            .filter(|vmod_name| !definitions.properties.contains_key(*vmod_name)) // filter out vmods found by vcc
-            .map(|ref vmod_name| {
-                // debug!("spawning task to vmod binary for «{vmod_name}»");
-                tokio::task::spawn(read_vmod_lib_by_name(
-                    vmod_name.to_string(),
-                    config.vmod_paths.to_owned(),
-                ))
-            })
-            .collect::<Vec<_>>();
-
-        for vmod_fut in vmod_futures {
-            if let Ok(Ok(Some(vmod))) = vmod_fut.await {
-                let vmod_name = vmod.name;
-                let import = all_vmod_imports.get(&vmod_name);
-                let def = Definition {
-                    ident_str: vmod_name.clone(),
-                    r#type: Box::new(vmod.scope),
-                    loc: import.map(|import| import.loc.clone()),
-                    nested_pos: import.and_then(|import| import.nested_pos.clone()),
-                };
-                definitions.properties.insert(vmod_name, def);
-            }
-        }
+        let mut vmod_scope = read_all_vmods(all_vmod_imports, &config).await;
+        definitions.properties.append(&mut vmod_scope.properties);
 
         // all objs (e.g. «new awdawd = new director.round_robin()»)
         let mut temp_map = BTreeMap::from_iter(
-            documents_from_main_in_order
-                .iter()
-                .flat_map(|doc| doc.get_all_definitions(&definitions))
+            documents_from_main_in_order.iter()
+                .flat_map(|doc| {
+                    let mut cache_entry = cache.entry(doc.url.clone()).or_insert_with(CacheEntry::default);
+                    if cache_entry.definitions.is_none() {
+                        cache_entry.definitions = Some(doc.get_all_definitions(&definitions));
+                    }
+                    cache_entry.definitions.clone().unwrap()
+                })
                 .map(|def| (def.ident_str.to_string(), def)),
         );
 
@@ -268,11 +198,6 @@ impl Backend {
         let doc = Document::new(doc_url.clone(), file, nested_pos);
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(doc_url.clone(), doc);
-    }
-
-    async fn emit_error(&self, err_msg: String) {
-        error!("{err_msg}");
-        self.client.log_message(MessageType::ERROR, err_msg).await;
     }
 }
 
@@ -418,6 +343,11 @@ impl LanguageServer for Backend {
             let mut doc_map = self.document_map.write().await;
             let doc = doc_map.get_mut(&uri).unwrap();
             doc.edit(version, changes);
+        }
+
+        {
+            let mut cache = self.cache.write().await;
+            cache.remove(&uri);
         }
 
         let scope = self.get_all_definitions_across_all_documents(&uri).await;
@@ -670,8 +600,118 @@ async fn read_config(root_path: &Path) -> Option<Config> {
     None
 }
 
+async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definitions {
+    let mut definitions = Definitions::default();
+
+    /*
+     * read all vcc files by glob (expects e.g. "{vcc_files_dir}/libvmod_std/vmod.vcc")
+     *
+     * TODO: maybe read all vcc files at startup, cache them, and then lookup from here.
+     * TODO: support pointing to singular vcc file or vmod src dir containing a vcc file
+     */
+    let vcc_files: Vec<PathBuf> = imports
+        .iter()
+        .flat_map(|import| {
+            config
+                .vcc_paths
+                .iter()
+                .find_map(|vcc_path| -> Option<PathBuf> {
+                    let vmod_name = &import.name;
+                    vec![
+                        vcc_path.join(format!("libvmod_{vmod_name}.vcc")),
+                        vcc_path
+                            .join(format!("libvmod_{vmod_name}"))
+                            .join("vmod.vcc"),
+                        vcc_path
+                            .join(format!("libvmod_{vmod_name}"))
+                            .join(format!("vmod_{vmod_name}.vcc")),
+                    ]
+                    .into_iter()
+                    .find(|path| {
+                        let path = Path::new(path);
+                        match path.try_exists() {
+                            Err(err) => {
+                                error!("Could not check {} due to {}", path.display(), err);
+                                false
+                            }
+                            Ok(exists) => exists,
+                        }
+                    })
+                })
+        })
+        .collect();
+
+    // parse each vcc file in their own thread.
+    let mut set = tokio::task::JoinSet::new();
+    for vcc_file_path in vcc_files {
+        set.spawn(async move { parse_vcc_file_by_path(&vcc_file_path) });
+    }
+
+    while let Some(result) = set.join_next().await {
+        let result = result
+            .map_err(Box::<dyn std::error::Error + Send + Sync>::from) // map JoinError into generic error
+            .and_then(|result| result); // replace with result from parse_vcc_file_by_path
+
+        let vmod_scope = match result {
+            Err(err) => {
+                error!("Failed to parse vmod vcc: {err}");
+                continue;
+            }
+            Ok(vmod_scope) => vmod_scope,
+        };
+        let vmod_name = match vmod_scope {
+            Type::Obj(ref obj) => obj.name.clone(),
+            _ => unreachable!(),
+        };
+        let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
+            error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+            continue;
+        };
+        let def = Definition {
+            ident_str: vmod_name.clone(),
+            r#type: Box::new(vmod_scope),
+            loc: Some(import.loc.clone()),
+            nested_pos: import.nested_pos.clone(),
+        };
+        definitions.properties.insert(vmod_name, def);
+    }
+
+    // read all vmods
+    let vmod_futures = imports
+        .iter()
+        .filter(|import| !definitions.properties.contains_key(&import.name)) // filter out vmods found by vcc
+        .map(|import| {
+            // debug!("spawning task to vmod binary for «{vmod_name}»");
+            tokio::task::spawn(read_vmod_lib_by_name(
+                import.name.clone(),
+                config.vmod_paths.to_owned(),
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    for vmod_fut in vmod_futures {
+        if let Ok(Ok(Some(vmod))) = vmod_fut.await {
+            let vmod_name = vmod.name;
+            let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
+                    error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+                    continue;
+                };
+            let def = Definition {
+                ident_str: import.name.clone(),
+                r#type: Box::new(vmod.scope),
+                loc: Some(import.loc.clone()),
+                nested_pos: import.nested_pos.clone(),
+            };
+            definitions.properties.insert(import.name.clone(), def);
+        }
+    }
+
+    definitions
+}
+
 fn get_all_documents<'a>(
     doc_map: &'a HashMap<Url, Document>,
+    cache: &mut HashMap<Url, CacheEntry>,
     root_uri: &Url,
     doc_path: &str,
     nested_pos: &NestedPos,
@@ -683,13 +723,25 @@ fn get_all_documents<'a>(
     };
 
     let mut docs = vec![main_doc];
-    let mut includes = main_doc
-        .get_includes(nested_pos)
+    let mut cache_entry = cache
+        .entry(doc_url)
+        .or_insert_with(CacheEntry::default);
+    if cache_entry.includes.is_none() {
+        cache_entry.includes = Some(main_doc.get_includes(nested_pos));
+    }
+    let includes = cache_entry.includes.clone().unwrap();
+    let mut deep_includes = includes
         .iter()
         .flat_map(|include| {
-            get_all_documents(doc_map, root_uri, &include.path_str, &include.nested_pos)
+            get_all_documents(
+                doc_map,
+                cache,
+                root_uri,
+                &include.path_str,
+                &include.nested_pos,
+            )
         })
         .collect();
-    docs.append(&mut includes);
+    docs.append(&mut deep_includes);
     docs
 }
