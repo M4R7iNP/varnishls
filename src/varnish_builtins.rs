@@ -590,6 +590,8 @@ pub fn get_varnish_builtins() -> Definitions {
         ..Func::default()
     });
 
+    let now = Type::Number; // TODO: time
+
     Definitions {
         #[rustfmt::skip]
         properties: BTreeMap::from([
@@ -605,6 +607,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("synthetic".into(), Definition::new_builtin("synthetic".into(), synthetic)),
             ("hash_data".into(), Definition::new_builtin("hash_data".into(), hash_data)),
             ("ban".into(),       Definition::new_builtin("ban".into(),       ban)),
+            ("now".into(),       Definition::new_builtin("now".into(),       now)),
         ]),
     }
 }
