@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
+const VCL_QUERY: &str = include_str!("../vendor/tree-sitter-vcl/queries/semantic_tokens.scm");
+const VTC_QUERY: &str = include_str!("../vendor/tree-sitter-vtc/queries/highlights.scm"); // TODO:
+
 #[derive(Clone, Copy)]
 pub enum FileType {
     Vcl,
@@ -66,6 +69,20 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
 ];
 
+pub const LEGEND_TYPES: &[SemanticTokenType] = &[
+    SemanticTokenType::VARIABLE,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::STRING,
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::REGEXP,
+    SemanticTokenType::NUMBER,
+    // SemanticTokenType::new("delimiter"),
+];
+
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
     let mut text = rope.byte_slice(node.byte_range()).to_string();
     if let Some((first_part, _)) = text.split_once('\n') {
@@ -104,7 +121,7 @@ impl Document {
             parser,
             ast,
             url,
-            filetype: FileType::Vcl,
+            filetype,
             pos_from_main_doc: nested_pos,
         }
     }
@@ -129,10 +146,13 @@ impl Document {
     fn edit_range(&mut self, _version: i32, range: Range, text: String) {
         let mut new_ast = self.ast.clone();
 
-        let start_char = self
-            .rope
-            .line(range.start.line as usize)
-            .utf16_cu_to_char(range.start.character as usize);
+        let start_line = self.rope.line(range.start.line as usize);
+        let start_char = start_line.utf16_cu_to_char(range.start.character as usize);
+        let start_position = Point {
+            row: range.start.line as usize,
+            column: start_line.char_to_byte(start_char),
+        };
+
         let old_end_char = self
             .rope
             .get_line(range.end.line as usize)
@@ -148,34 +168,31 @@ impl Document {
                 unreachable!();
             });
 
-        let old_end_position = Point {
-            row: range.end.line as usize,
-            column: old_end_char,
-        };
-
         let start = self.rope.line_to_char(range.start.line as usize) + start_char;
         let end = self.rope.line_to_char(range.end.line as usize) + old_end_char;
+
+        let old_end_position = Point {
+            row: range.end.line as usize,
+            column: self.rope.char_to_byte(end) - self.rope.line_to_byte(range.end.line as usize),
+        };
+
         let old_end_byte = self.rope.char_to_byte(end);
         self.rope.remove(start..end);
         self.rope.insert(start, text.as_str());
         let start_byte = self.rope.char_to_byte(start);
-        let new_end_byte = start_byte + text.as_bytes().len();
+        let new_end_byte = start_byte + text.len();
         let new_end_line = self.rope.byte_to_line(new_end_byte);
-        let new_end_col =
-            self.rope.byte_to_char(new_end_byte) - self.rope.line_to_char(new_end_line);
+
         let new_end_position = Point {
             row: new_end_line,
-            column: new_end_col,
+            column: new_end_byte - self.rope.line_to_byte(new_end_line),
         };
 
         new_ast.edit(&InputEdit {
             start_byte,
             old_end_byte,
             new_end_byte,
-            start_position: Point {
-                row: range.start.line as usize,
-                column: range.start.character as usize,
-            },
+            start_position,
             old_end_position,
             new_end_position,
         });
@@ -724,8 +741,7 @@ impl Document {
     }
 
     pub fn get_vmod_imports(&self) -> Vec<VmodImport> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(import_declaration (ident) @ident)").unwrap();
+        let q = Query::new(self.ast.language(), "(import_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
@@ -755,8 +771,11 @@ impl Document {
     }
 
     pub fn get_includes(&self, nested_pos: &NestedPos) -> Vec<Include> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(include_declaration (string) @string)").unwrap();
+        let q = Query::new(
+            self.ast.language(),
+            "(include_declaration (string) @string)",
+        )
+        .unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("string").unwrap();
@@ -781,8 +800,7 @@ impl Document {
     }
 
     pub fn get_subroutines(&self) -> Vec<String> {
-        let ast = self.ast.clone();
-        let q = Query::new(ast.language(), "(sub_declaration (ident) @ident)").unwrap();
+        let q = Query::new(self.ast.language(), "(sub_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
         let all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
@@ -1196,6 +1214,91 @@ impl Document {
         suggestions.append(&mut keyword_suggestions);
 
         Some(suggestions)
+    }
+
+    pub fn get_semantic_tokens(&self) -> Vec<SemanticToken> {
+        let node = self.ast.root_node();
+        let mut query_str = VCL_QUERY.to_string();
+        if matches!(self.filetype, FileType::Vtc) {
+            query_str.push_str(VTC_QUERY);
+        }
+        let q = Query::new(self.ast.language(), query_str.as_str()).unwrap();
+        let mut qc = QueryCursor::new();
+        let all_matches = qc.matches(&q, node, self);
+
+        let names = q.capture_names();
+
+        #[derive(Eq, PartialEq, PartialOrd, Ord)]
+        struct Token {
+            line: usize,
+            start: usize,
+            token_type: usize, // LEGEND_TYPES is ordered, so we can order by this for precendence
+            length: usize,
+        }
+
+        let mut tokens = vec![];
+        for m in all_matches {
+            for c in m.captures {
+                let node = c.node;
+                let range = node.range();
+                let name = names.get(c.index as usize).unwrap();
+                let Some(token_type) = LEGEND_TYPES.iter().position(|s| s.as_str() == name) else {
+                    continue;
+                };
+                for row in range.start_point.row..=range.end_point.row {
+                    let start = if row == range.start_point.row {
+                        let start_line = self.rope.line(row);
+                        start_line
+                            .char_to_utf16_cu(start_line.byte_to_char(range.start_point.column))
+                    } else {
+                        0
+                    };
+
+                    let end_line = self.rope.line(row);
+                    let end = if row == range.end_point.row {
+                        end_line.char_to_utf16_cu(end_line.byte_to_char(range.end_point.column))
+                    } else {
+                        end_line.len_utf16_cu()
+                    };
+
+                    tokens.push(Token {
+                        start,
+                        line: row,
+                        length: end - start,
+                        token_type,
+                    })
+                }
+            }
+        }
+
+        tokens.sort();
+
+        let mut prev_line = 0;
+        let mut prev_start = 0;
+        let semantic_tokens = tokens
+            .iter()
+            .map(|tok| {
+                let delta_line = tok.line - prev_line;
+                let delta_start = if delta_line == 0 {
+                    tok.start - prev_start
+                } else {
+                    tok.start
+                };
+                let semtok = SemanticToken {
+                    delta_start: delta_start as u32,
+                    delta_line: delta_line as u32,
+                    length: tok.length as u32,
+                    token_type: tok.token_type as u32,
+                    token_modifiers_bitset: 0,
+                };
+
+                prev_line = tok.line;
+                prev_start = tok.start;
+                semtok
+            })
+            .collect::<Vec<_>>();
+
+        semantic_tokens
     }
 }
 
