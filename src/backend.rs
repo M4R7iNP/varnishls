@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use log::{debug, error};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
