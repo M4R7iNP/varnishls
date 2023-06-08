@@ -12,6 +12,7 @@
   "txresp"
   "shell"
   "process"
+  "setenv"
 ] @keyword
 
 "<undef>" @constant

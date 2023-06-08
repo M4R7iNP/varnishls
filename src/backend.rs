@@ -292,7 +292,7 @@ impl LanguageServer for Backend {
                                 work_done_progress_options: Default::default(),
                                 legend: SemanticTokensLegend {
                                     token_types: LEGEND_TYPES.into(),
-                                    token_modifiers: vec![],
+                                    token_modifiers: vec!["defaultLibrary".into()],
                                 },
                                 range: Some(false),
                                 full: Some(SemanticTokensFullOptions::Bool(true)),
@@ -336,11 +336,16 @@ impl LanguageServer for Backend {
             drop(doc_map);
         }
 
+        let config = self.config.read().await;
         let scope = self.get_all_definitions_across_all_documents(&uri).await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
         self.client
-            .publish_diagnostics(uri.clone(), doc.diagnostics(scope), Some(doc.version()))
+            .publish_diagnostics(
+                uri.clone(),
+                doc.diagnostics(scope, &config.lint),
+                Some(doc.version()),
+            )
             .await;
 
         let includes = doc.get_includes(doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]));
@@ -371,12 +376,17 @@ impl LanguageServer for Backend {
             cache.remove(&uri);
         }
 
+        let config = self.config.read().await;
         let scope = self.get_all_definitions_across_all_documents(&uri).await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
 
         self.client
-            .publish_diagnostics(uri.clone(), doc.diagnostics(scope), Some(doc.version()))
+            .publish_diagnostics(
+                uri.clone(),
+                doc.diagnostics(scope, &config.lint),
+                Some(doc.version()),
+            )
             .await;
 
         let includes = doc.get_includes(doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]));

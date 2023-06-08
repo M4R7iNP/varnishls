@@ -9,6 +9,8 @@ pub struct Config {
     pub vmod_paths: Vec<PathBuf>,
     #[serde(default)]
     pub vcc_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub lint: LintConfig,
 }
 
 impl Default for Config {
@@ -26,6 +28,21 @@ impl Default for Config {
                 "/usr/lib/varnish/vmods".into(),
             ],
             vcc_paths: vec![],
+            lint: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LintConfig {
+    #[serde(default)]
+    pub no_rewrite_req_url: bool,
+}
+
+impl Default for LintConfig {
+    fn default() -> Self {
+        LintConfig {
+            no_rewrite_req_url: true,
         }
     }
 }

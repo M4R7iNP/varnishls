@@ -21,6 +21,7 @@ module.exports = grammar(vclGrammar, {
         $.syslog,
         $.delay,
         $.shell,
+        $.setenv,
       ),
     vtc_block_statement: $ => choice($.txrx_statement, $.expect),
     varnishtest: $ => seq(choice('varnishtest', 'vtest'), $.string),
@@ -48,6 +49,7 @@ module.exports = grammar(vclGrammar, {
     haproxy: $ => seq('haproxy', $.ident, repeat($.argument)),
     syslog: $ => seq('syslog', $.ident, repeat($.argument)),
     delay: $ => seq('delay', $.number),
+    setenv: $ => seq('setenv', optional('-ifunset'), $.ident, $.string),
 
     // TODO:
     shell: $ =>

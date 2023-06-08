@@ -9,8 +9,8 @@ use tower_lsp::{LspService, Server};
 
 use varnishls::backend::Backend;
 use varnishls::document::Document;
-use varnishls::vmod::{read_vmod_lib, read_vmod_lib_by_name};
 use varnishls::varnish_builtins::get_varnish_builtins;
+use varnishls::vmod::{read_vmod_lib, read_vmod_lib_by_name};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum LintLevel {
@@ -127,10 +127,10 @@ async fn main() -> ExitCode {
                 let doc = Document::new(
                     Url::from_file_path(fs::canonicalize(file_path).await.unwrap()).unwrap(),
                     src,
-                    Some(vec![])
+                    Some(vec![]),
                 );
                 // TODO: get all definitions
-                let mut errors = doc.get_error_ranges(get_varnish_builtins());
+                let mut errors = doc.get_error_ranges(get_varnish_builtins(), &Default::default());
                 results.append(&mut errors);
             }
 

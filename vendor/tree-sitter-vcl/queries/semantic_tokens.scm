@@ -48,7 +48,7 @@
 (bool) @number
 
 (ident) @variable
-(nested_ident) @variable
+(nested_ident) @property
 
 (binary_expression
   operator: (operator (rmatch))
@@ -58,7 +58,7 @@
   ident: (nested_ident) @function)
 
 (ident_call_expr
-  ident: (ident) @keyword (#match? @keyword "^regsub|regsuball|hash_data|synthetic|ban$"))
+  ident: (ident) @function.defaultLibrary (#match? @function.defaultLibrary "^regsub|regsuball|hash_data|synthetic|ban$"))
 
 (func_call_named_arg
    arg_name: (ident) @parameter)

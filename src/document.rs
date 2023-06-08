@@ -1,4 +1,5 @@
 use crate::{
+    config::LintConfig,
     parser, static_autocomplete_items,
     varnish_builtins::{
         self, get_backend_field_types, get_probe_field_types, AutocompleteSearchOptions,
@@ -80,8 +81,11 @@ pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::PARAMETER,
     SemanticTokenType::REGEXP,
     SemanticTokenType::NUMBER,
+    SemanticTokenType::PROPERTY,
     // SemanticTokenType::new("delimiter"),
 ];
+
+pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DEFAULT_LIBRARY];
 
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
     let mut text = rope.byte_slice(node.byte_range()).to_string();
@@ -308,7 +312,11 @@ impl Document {
     // TODO: only check definition line numbers for certain types
     // TO CHECK: probes, ident_call_exprs
     // TO NOT CHECK: backends, subroutines
-    pub fn get_error_ranges(&self, global_scope: Definitions) -> Vec<LintError> {
+    pub fn get_error_ranges(
+        &self,
+        global_scope: Definitions,
+        config: &LintConfig,
+    ) -> Vec<LintError> {
         let mut cursor = self.ast.walk();
         let mut error_ranges = Vec::new();
         let mut recurse = true;
@@ -344,14 +352,14 @@ impl Document {
                 }
             }
 
-            macro_rules! add_warning {
+            macro_rules! add_hint {
                 (node: $node:expr, $($arg:tt)+) => {
                     let range = ts_range_to_lsp_range($node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::WARNING, $($arg)+);
+                    add_error!(range: range, severity: DiagnosticSeverity::HINT, $($arg)+);
                 };
                 ($($arg:tt)+) => {
                     let range = ts_range_to_lsp_range(node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(range: range, severity: DiagnosticSeverity::HINT, $($arg)+);
                 }
             }
 
@@ -369,42 +377,77 @@ impl Document {
 
             match node.kind() {
                 "set_stmt" => {
-                    let Some(left) = node.child_by_field_name("left") else {
+                    let Some(left_node) = node.child_by_field_name("left") else {
                         add_error!("Missing set property");
                         continue;
                     };
 
-                    let Some(_right) = node.child_by_field_name("right") else {
+                    let Some(right_node) = node.child_by_field_name("right") else {
                         add_error!("Missing set value");
                         continue;
                     };
 
                     let left_ident_text = {
-                        if matches!(left.kind(), "ident" | "nested_ident") {
-                            get_node_text(&self.rope, &left).to_lowercase()
+                        if matches!(left_node.kind(), "ident" | "nested_ident") {
+                            get_node_text(&self.rope, &left_node).to_lowercase()
                         } else {
                             continue;
                         }
                     };
 
                     let left_parts = left_ident_text.split('.').collect::<Vec<_>>();
-                    if vec!["req", "bereq", "resp", "beresp"].contains(&left_parts[0])
-                        && matches!(left_parts.get(1), Some(&"http"))
-                        && matches!(
-                            left_parts.get(2),
-                            Some(&"content-dpr")
-                                | Some(&"dnt")
-                                | Some(&"dpr")
-                                | Some(&"large-allocation")
-                                | Some(&"pragma")
-                                | Some(&"sec-ch-ua-full-version")
-                                | Some(&"tk")
-                                | Some(&"viewport-width")
-                                | Some(&"width")
-                        )
-                    {
-                        let hdr = left_parts[2];
-                        add_warning!(node: left, "Deprecated header {hdr}");
+                    if vec!["req", "bereq", "resp", "beresp"].contains(&left_parts[0]) {
+                        // Deprecated headers (from MDN)
+                        if matches!(left_parts.get(1), Some(&"http"))
+                            && matches!(
+                                left_parts.get(2),
+                                Some(&"content-dpr")
+                                    | Some(&"dnt")
+                                    | Some(&"dpr")
+                                    | Some(&"large-allocation")
+                                    | Some(&"pragma")
+                                    | Some(&"sec-ch-ua-full-version")
+                                    | Some(&"tk")
+                                    | Some(&"viewport-width")
+                                    | Some(&"width")
+                            )
+                        {
+                            let hdr = left_parts[2];
+                            add_hint!(node: left_node, "Deprecated header {hdr}");
+                        }
+
+                        // Hit-for-pass is usually better than no cache at all
+                        if left_parts.get(1) == Some(&"ttl") {
+                            let right_text = get_node_text(&self.rope, &right_node);
+                            if matches!(right_text.as_str(), "0s" | "0") {
+                                add_hint!("Consider using .cacheable = false instead");
+                            }
+                        }
+
+                        // Vary on header with many arbitrary values
+                        if left_parts.get(1) == Some(&"vary") {
+                            let right_text = get_node_text(&self.rope, &right_node);
+                            if matches!(
+                                right_text.as_str().to_lowercase().as_str(),
+                                "*" | "user-agent" | "accept-encoding" | "accept-language"
+                            ) {
+                                add_hint!("Consider filtering header before vary");
+                            }
+                        }
+
+                        // Rewriting req.url also changes the cache key, so requests hitting that
+                        // cache key might get a different response that intended.
+                        if config.no_rewrite_req_url && left_ident_text.as_str() == "req.url" {
+                            let toplev_decl = get_toplev_declaration_from_node(node);
+                            if toplev_decl.kind() == "sub_declaration" {
+                                if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
+                                    let sub_name = get_node_text(&self.rope, &ident_node);
+                                    if sub_name == "vcl_recv" {
+                                        add_hint!("[no_rewrite_req_url] Don't rewrite req.url. Rather, make a concious decision whether to edit the cache key or just the backend url.");
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 "new_stmt" => {
@@ -592,7 +635,10 @@ impl Document {
                         let arg_value_node;
                         if arg_node.kind() == "func_call_named_arg" {
                             let Some(arg_name_node) = arg_node.child_by_field_name("arg_name") else { continue; };
-                            let Some(_arg_value_node) = arg_node.child_by_field_name("arg_value") else { continue; };
+                            let Some(_arg_value_node) = arg_node.child_by_field_name("arg_value") else {
+                                add_error!(node: arg_node, "Expected value");
+                                continue;
+                            };
                             arg_value_node = _arg_value_node;
                             let arg_name = get_node_text(&self.rope, &arg_name_node);
                             let Some(_arg) = func
@@ -615,8 +661,8 @@ impl Document {
                             arg_value_node = arg_node;
                         }
 
-                        match arg.r#type {
-                            Some(Type::Enum(ref enum_values)) => {
+                        if let Some(arg_type) = arg.r#type.as_ref() {
+                            if let Type::Enum(enum_values) = arg_type {
                                 // validate enums
                                 if arg_value_node.kind() != "ident" {
                                     add_error!(node: arg_node, "Enum not found");
@@ -632,21 +678,28 @@ impl Document {
                                     );
                                     continue;
                                 }
-                            }
-                            Some(ref arg_type) => {
+                            } else if matches!(
+                                arg_value_node.kind(),
+                                "literal" | "ident" | "nested_ident"
+                            ) {
                                 // check provided type can cast into argument type
-                                if let Some(arg_value_type) = node_to_type(&arg_value_node) {
-                                    if !arg_value_type.can_this_cast_into(arg_type) {
-                                        add_error!(
-                                            node: arg_value_node,
-                                            "{} cannot cast into {}",
-                                            arg_value_type,
-                                            arg_type
-                                        );
-                                    }
+                                let Some(arg_value_type) = node_to_type(&arg_value_node).or_else(|| {
+                                    let ident = get_node_text(&self.rope, &arg_value_node);
+                                    let ident_parts = ident.split('.').collect::<Vec<_>>();
+                                    global_scope.get_type_property_by_nested_idents(ident_parts.clone()).cloned()
+                                }) else {
+                                    add_error!(node: arg_value_node, "Not found");
+                                    continue;
+                                };
+                                if !arg_value_type.can_this_cast_into(arg_type) {
+                                    add_error!(
+                                        node: arg_value_node,
+                                        "{} cannot cast into {}",
+                                        arg_value_type,
+                                        arg_type
+                                    );
                                 }
                             }
-                            _ => {}
                         }
                     }
                 }
@@ -661,22 +714,7 @@ impl Document {
                         continue;
                     }
 
-                    let toplev_decl = {
-                        let mut node = node;
-                        loop {
-                            match node.parent() {
-                                Some(parent_node) if parent_node.kind() == "toplev_declaration" => {
-                                    break;
-                                }
-                                Some(parent_node) => {
-                                    node = parent_node;
-                                }
-                                None => break,
-                            }
-                        }
-                        node
-                    };
-
+                    let toplev_decl = get_toplev_declaration_from_node(node);
                     if toplev_decl.kind() == "sub_declaration" {
                         if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
                             let sub_name = &*get_node_text(&self.rope, &ident_node);
@@ -727,9 +765,13 @@ impl Document {
         error_ranges
     }
 
-    pub fn diagnostics(&self, global_scope: Definitions) -> Vec<Diagnostic> {
+    pub fn diagnostics(
+        &self,
+        global_scope: Definitions,
+        lint_config: &LintConfig,
+    ) -> Vec<Diagnostic> {
         return self
-            .get_error_ranges(global_scope)
+            .get_error_ranges(global_scope, lint_config)
             .iter()
             .map(|lint_error| Diagnostic {
                 range: lint_error.loc.range,
@@ -820,10 +862,8 @@ impl Document {
         let q = Query::new(
             self.ast.language(),
             r#"
-            [
                 (toplev_declaration (_ (ident) @ident ) @node)
                 (new_stmt ident: (ident) @ident def_right: (ident_call_expr ident: (_) @def_ident)) @node
-            ]
             "#,
         );
         if let Err(err) = q {
@@ -965,8 +1005,10 @@ impl Document {
         };
 
         let target_row = self.rope.line(target_point.row);
-        if matches!(target_row.get_char(target_point.column), None | Some('\n'))
-            && target_point.column > 0
+        if matches!(
+            target_row.get_char(target_point.column),
+            None | Some('\n') | Some(',')
+        ) && target_point.column > 0
         {
             debug!("decrementing by one");
             target_point.column -= 1;
@@ -989,14 +1031,22 @@ impl Document {
         // walk down, then up again
         while cursor.goto_first_child_for_point(target_point).is_some() {}
         debug!("cursor.node(): {:?}", cursor.node());
+        if matches!(cursor.node().kind(), "," | ")") {
+            // move cursor one point back
+            if let Some(prev_sibling) = cursor.node().prev_sibling() {
+                if prev_sibling.kind() != "(" {
+                    debug!("prev_sibling: {prev_sibling:?}");
+                    cursor.reset(prev_sibling);
+                }
+            }
+        }
         let mut stop = false;
         while !stop {
             let node = cursor.node();
             debug!("visiting node {:?}", node);
 
-            let parent_node = match node.parent() {
-                Some(node) => node,
-                _ => break,
+            let Some(parent_node) = node.parent() else {
+                break;
             };
 
             match parent_node.kind() {
@@ -1014,22 +1064,20 @@ impl Document {
                             must_be_writable = true;
                         }
                         Some("right") => {
-                            // text = get_node_text(&self.rope, &node);
                             if let Some(ctx_node) = parent_node.child_by_field_name("left") {
                                 let ctx_node_str = get_node_text(&self.rope, &ctx_node);
-                                if ["req.http.", "resp.http.", "bereq.http.", "beresp.http."]
-                                    .iter()
-                                    .any(|variable| ctx_node_str.starts_with(variable))
-                                {
-                                    search_type = Some(Type::String);
+                                let left_type = global_scope.get_type_property_by_nested_idents(
+                                    ctx_node_str.split('.').collect(),
+                                );
+
+                                if let Some(Type::Obj(obj)) = left_type {
+                                    // Filter by string for headers
+                                    if obj.is_http_headers {
+                                        search_type = Some(Type::String);
+                                    }
                                 } else {
-                                    search_type = global_scope
-                                        .get_type_property_by_nested_idents(
-                                            ctx_node_str.split('.').collect(),
-                                        )
-                                        // ignore objects here
-                                        .filter(|search_type| !matches!(search_type, Type::Obj(_)))
-                                        .cloned();
+                                    // Autocomplete same type as left type
+                                    search_type = left_type.cloned();
                                 }
                             }
                         }
@@ -1037,6 +1085,7 @@ impl Document {
                     }
                     stop = true;
                 }
+                // Autocomplete backend/probe properties
                 "backend_property" | "backend_declaration" | "probe_declaration" => {
                     let mut field = cursor.field_name();
                     if node.kind() == ";" || node.kind() == "=" {
@@ -1069,23 +1118,13 @@ impl Document {
                         _ => {}
                     };
                 }
+                // Filter by subroutines for call statements
                 "call_stmt" => {
-                    debug!(
-                        "reached call statement ({:?}) ({:?}) ({:?})",
-                        node,
-                        parent_node,
-                        cursor.field_name()
-                    );
                     search_type = Some(Type::Sub);
                     stop = true;
                 }
+                // Autocomplete return methods
                 "ret_stmt" => {
-                    debug!(
-                        "reached return statement ({:?}) ({:?}) ({:?})",
-                        node,
-                        parent_node,
-                        cursor.field_name()
-                    );
                     return Some(
                         varnish_builtins::RETURN_METHODS
                             .iter()
@@ -1098,6 +1137,74 @@ impl Document {
                             .collect(),
                     );
                 }
+                // Autocomplete named arguments
+                "func_call_args" => {
+                    let func_node = find_parent(node, "ident_call_expr".to_string()).unwrap();
+                    let func_ident =
+                        get_node_text(&self.rope, &func_node.child_by_field_name("ident").unwrap());
+                    if let Some(Type::Func(func)) = global_scope
+                        .get_type_property_by_nested_idents(func_ident.split('.').collect())
+                    {
+                        // Add to suggestions
+                        keyword_suggestions = func
+                            .args
+                            .iter()
+                            .filter_map(|arg| {
+                                arg.name.as_ref().map(|name| CompletionItem {
+                                    label: name.to_string(),
+                                    kind: Some(CompletionItemKind::PROPERTY), // closest?
+                                    label_details: Some(CompletionItemLabelDetails {
+                                        detail: Some("Parameter".to_string()),
+                                        description: None,
+                                    }),
+                                    insert_text: Some(format!("{name} = ")),
+                                    detail: arg.r#type.as_ref().map(|t| format!("{t}")),
+                                    ..Default::default()
+                                })
+                            })
+                            .collect();
+                    }
+                }
+                // Autocomplete enum arguments
+                "func_call_named_arg" => {
+                    if cursor.field_name() == Some("arg_value") || node.kind() == "=" {
+                        let arg_name = get_node_text(
+                            &self.rope,
+                            &node
+                                .parent()
+                                .unwrap()
+                                .child_by_field_name("arg_name")
+                                .unwrap(),
+                        );
+                        let func_node = find_parent(node, "ident_call_expr".to_string()).unwrap();
+                        let func_ident = get_node_text(
+                            &self.rope,
+                            &func_node.child_by_field_name("ident").unwrap(),
+                        );
+                        if let Some(Type::Func(func)) = global_scope
+                            .get_type_property_by_nested_idents(func_ident.split('.').collect())
+                        {
+                            if let Some(arg) = func
+                                .args
+                                .iter()
+                                .find(|arg| arg.name.as_ref() == Some(&arg_name))
+                            {
+                                if let Some(Type::Enum(enum_values)) = arg.r#type.as_ref() {
+                                    return Some(
+                                        enum_values
+                                            .iter()
+                                            .map(|enum_value| CompletionItem {
+                                                label: enum_value.to_string(),
+                                                kind: Some(CompletionItemKind::ENUM),
+                                                ..Default::default()
+                                            })
+                                            .collect(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 "source_file" => {
                     return Some(static_autocomplete_items::source_file());
                 }
@@ -1109,7 +1216,6 @@ impl Document {
                 }
                 _ => {
                     if parent_node.kind() == "new_stmt" || node.kind() == "new_stmt" {
-                        debug!("huhh: {:?} ({:?})", node, cursor.field_name());
                         match cursor.field_name() {
                             Some("ident") => {
                                 return Some(vec![]);
@@ -1224,7 +1330,6 @@ impl Document {
         }
         let q = Query::new(self.ast.language(), query_str.as_str()).unwrap();
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, node, self);
 
         let names = q.capture_names();
 
@@ -1233,50 +1338,59 @@ impl Document {
             line: usize,
             start: usize,
             token_type: usize, // LEGEND_TYPES is ordered, so we can order by this for precendence
+            modifier: usize,
             length: usize,
         }
 
         let mut tokens = vec![];
-        for m in all_matches {
-            for c in m.captures {
-                let node = c.node;
-                let range = node.range();
-                let name = names.get(c.index as usize).unwrap();
-                let Some(token_type) = LEGEND_TYPES.iter().position(|s| s.as_str() == name) else {
-                    continue;
+        for c in qc.matches(&q, node, self).flat_map(|m| m.captures) {
+            let node = c.node;
+            let range = node.range();
+            let mut capture_name = names.get(c.index as usize).unwrap().splitn(2, '.');
+            let name = capture_name.next().unwrap();
+            let modifier_name = capture_name.next();
+            let Some(token_type) = LEGEND_TYPES.iter().position(|s| s.as_str() == name) else {
+                continue;
+            };
+            let modifier = modifier_name
+                .and_then(|modifier_name| {
+                    LEGEND_MODIFIERS
+                        .iter()
+                        .position(|s| s.as_str() == modifier_name)
+                })
+                .unwrap_or(0);
+
+            for row in range.start_point.row..=range.end_point.row {
+                let start = if row == range.start_point.row {
+                    let start_line = self.rope.line(row);
+                    start_line.char_to_utf16_cu(start_line.byte_to_char(range.start_point.column))
+                } else {
+                    0
                 };
-                for row in range.start_point.row..=range.end_point.row {
-                    let start = if row == range.start_point.row {
-                        let start_line = self.rope.line(row);
-                        start_line
-                            .char_to_utf16_cu(start_line.byte_to_char(range.start_point.column))
-                    } else {
-                        0
-                    };
 
-                    let end_line = self.rope.line(row);
-                    let end = if row == range.end_point.row {
-                        end_line.char_to_utf16_cu(end_line.byte_to_char(range.end_point.column))
-                    } else {
-                        end_line.len_utf16_cu()
-                    };
+                let end_line = self.rope.line(row);
+                let end = if row == range.end_point.row {
+                    end_line.char_to_utf16_cu(end_line.byte_to_char(range.end_point.column))
+                } else {
+                    end_line.len_utf16_cu()
+                };
 
-                    tokens.push(Token {
-                        start,
-                        line: row,
-                        length: end - start,
-                        token_type,
-                    })
-                }
+                tokens.push(Token {
+                    start,
+                    line: row,
+                    length: end - start,
+                    token_type,
+                    modifier,
+                });
             }
         }
 
-        tokens.sort();
+        tokens.sort_unstable();
 
         let mut prev_line = 0;
         let mut prev_start = 0;
-        let semantic_tokens = tokens
-            .iter()
+        tokens
+            .into_iter()
             .map(|tok| {
                 let delta_line = tok.line - prev_line;
                 let delta_start = if delta_line == 0 {
@@ -1289,16 +1403,14 @@ impl Document {
                     delta_line: delta_line as u32,
                     length: tok.length as u32,
                     token_type: tok.token_type as u32,
-                    token_modifiers_bitset: 0,
+                    token_modifiers_bitset: tok.modifier as u32,
                 };
 
                 prev_line = tok.line;
                 prev_start = tok.start;
                 semtok
             })
-            .collect::<Vec<_>>();
-
-        semantic_tokens
+            .collect()
     }
 }
 
@@ -1377,6 +1489,33 @@ pub fn node_to_type(node: &Node) -> Option<Type> {
 
 fn point_to_tuple(point: Point) -> (usize, usize) {
     (point.row, point.column)
+}
+
+fn get_toplev_declaration_from_node(node: Node) -> Node {
+    let mut node = node;
+    loop {
+        let Some(parent_node) = node.parent() else {
+            break;
+        };
+        if parent_node.kind() == "toplev_declaration" {
+            break;
+        }
+        node = parent_node;
+    }
+    node
+}
+
+fn find_parent(node: Node, kind: String) -> Option<Node> {
+    let mut node = node;
+    loop {
+        let Some(parent_node) = node.parent() else {
+            return None;
+        };
+        node = parent_node;
+        if node.kind() == kind {
+            return Some(node);
+        }
+    }
 }
 
 #[cfg(test)]

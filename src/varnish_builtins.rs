@@ -199,6 +199,7 @@ pub struct Obj {
     pub properties: Properties,
     pub read_only: bool,
     pub definition: Option<Definition>,
+    pub is_http_headers: bool,
 }
 
 impl HasTypeProperties for Obj {
@@ -209,6 +210,9 @@ impl HasTypeProperties for Obj {
             .collect()
     }
     fn get_type_property(&self, ident: &str) -> Option<&Type> {
+        if self.is_http_headers {
+            return Some(&Type::String);
+        }
         self.properties.get(&ident.to_string())
     }
     fn obj(&self) -> Option<&Obj> {
@@ -361,6 +365,7 @@ pub fn get_varnish_builtins() -> Definitions {
                 Type::Obj(Obj {
                     name: "req.http".to_string(),
                     read_only: false,
+                    is_http_headers: true,
                     properties: BTreeMap::from_iter(
                         DEFAULT_REQUEST_HEADERS
                             .iter()
@@ -392,6 +397,7 @@ pub fn get_varnish_builtins() -> Definitions {
                 Type::Obj(Obj {
                     name: "bereq.http".to_string(),
                     read_only: false,
+                    is_http_headers: true,
                     properties: BTreeMap::from_iter(
                         DEFAULT_REQUEST_HEADERS
                             .iter()
@@ -422,6 +428,7 @@ pub fn get_varnish_builtins() -> Definitions {
                 Type::Obj(Obj {
                     name: "req.http".to_string(),
                     read_only: false,
+                    is_http_headers: true,
                     properties: BTreeMap::from_iter(
                         DEFAULT_RESPONSE_HEADERS
                             .iter()
@@ -447,6 +454,7 @@ pub fn get_varnish_builtins() -> Definitions {
                 Type::Obj(Obj {
                     name: "req.http".to_string(),
                     read_only: false,
+                    is_http_headers: true,
                     properties: BTreeMap::from_iter(
                         DEFAULT_RESPONSE_HEADERS
                             .iter()
@@ -462,6 +470,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("backend.ip".to_string(), Type::String),
             ("uncacheable".to_string(), Type::Bool),
             ("age".to_string(), Type::Duration),
+            ("ttl".to_string(), Type::Duration),
             ("grace".to_string(), Type::Duration),
             ("keep".to_string(), Type::Duration),
             // ("storage".to_string(), Type::String),

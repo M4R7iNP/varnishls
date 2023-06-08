@@ -156,7 +156,7 @@ fn parse_type<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<
         "PROBE" => Some(Type::Probe),
         "ACL" => Some(Type::Acl),
         "HTTP" => Some(Type::Obj(Default::default())), // for now
-        "HEADER" => Some(Type::Obj(Default::default())), // for now
+        "HEADER" => Some(Type::String),
         "ENUM" => {
             // TODO: consume enum values
             let mut values = vec![];
