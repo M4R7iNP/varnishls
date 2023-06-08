@@ -1862,7 +1862,7 @@ backend my_backend {
                 .map(|def| (def.ident_str.to_string(), def.clone())),
         );
         defs.properties.append(&mut map);
-        let errors = doc.diagnostics(defs);
+        let errors = doc.diagnostics(defs, &Default::default());
         assert_eq!(errors.len(), 0, "Should produce no errors");
     }
 
