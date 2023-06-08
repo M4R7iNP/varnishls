@@ -10,7 +10,7 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{Document, Include, NestedPos, LEGEND_TYPES, VmodImport};
+use crate::document::{Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -87,7 +87,9 @@ impl Backend {
         let all_vmod_imports = documents_from_main_in_order
             .iter()
             .flat_map(|doc| {
-                let mut cache_entry = cache.entry(doc.url.clone()).or_insert_with(CacheEntry::default);
+                let mut cache_entry = cache
+                    .entry(doc.url.clone())
+                    .or_insert_with(CacheEntry::default);
                 if cache_entry.vmod_imports.is_none() {
                     cache_entry.vmod_imports = Some(doc.get_vmod_imports());
                 }
@@ -108,9 +110,12 @@ impl Backend {
 
         // all objs (e.g. «new awdawd = new director.round_robin()»)
         let mut temp_map = BTreeMap::from_iter(
-            documents_from_main_in_order.iter()
+            documents_from_main_in_order
+                .iter()
                 .flat_map(|doc| {
-                    let mut cache_entry = cache.entry(doc.url.clone()).or_insert_with(CacheEntry::default);
+                    let mut cache_entry = cache
+                        .entry(doc.url.clone())
+                        .or_insert_with(CacheEntry::default);
                     if cache_entry.definitions.is_none() {
                         cache_entry.definitions = Some(doc.get_all_definitions(&definitions));
                     }
@@ -306,6 +311,7 @@ impl LanguageServer for Backend {
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -608,6 +614,44 @@ impl LanguageServer for Backend {
         })))
     }
 
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        let cache = self.cache.read().await;
+        let Some(cache_entry) = cache.get(&uri) else {
+            let mut err = Error::internal_error();
+            err.message = "Document not found in cache".to_string();
+            return Result::Err(err);
+        };
+
+        let Some(ref defs) = cache_entry.definitions else {
+            return Ok(None);
+        };
+
+        Ok(Some(DocumentSymbolResponse::Flat(
+            defs.iter()
+                .filter(|def| def.loc.is_some())
+                .map(|definition| SymbolInformation {
+                    name: definition.ident_str.to_string(),
+                    kind: match *definition.r#type {
+                        Type::Sub => SymbolKind::FUNCTION,
+                        Type::Acl => SymbolKind::STRUCT,
+                        Type::Backend => SymbolKind::STRUCT,
+                        Type::Probe => SymbolKind::STRUCT,
+                        Type::Obj(_) => SymbolKind::STRUCT,
+                        _ => SymbolKind::NULL,
+                    },
+                    location: definition.loc.clone().unwrap(),
+                    deprecated: None,
+                    tags: None,
+                    container_name: None,
+                })
+                .collect(),
+        )))
+    }
+
     async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
         self.client
             .log_message(MessageType::INFO, "configuration changed!")
@@ -778,9 +822,7 @@ fn get_all_documents<'a>(
     };
 
     let mut docs = vec![main_doc];
-    let mut cache_entry = cache
-        .entry(doc_url)
-        .or_insert_with(CacheEntry::default);
+    let mut cache_entry = cache.entry(doc_url).or_insert_with(CacheEntry::default);
     if cache_entry.includes.is_none() {
         cache_entry.includes = Some(main_doc.get_includes(nested_pos));
     }
