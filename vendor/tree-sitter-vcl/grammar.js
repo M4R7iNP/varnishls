@@ -276,7 +276,7 @@ module.exports = grammar({
       seq(
         field('arg_name', $.ident),
         '=',
-        field('arg_value', optional(choic($.expr, $.ident))),
+        field('arg_value', optional(choice($.expr, $.ident))),
       ),
     func_call_args: $ =>
       seq(
