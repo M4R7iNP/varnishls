@@ -149,7 +149,7 @@ fn parse_type<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<
         "REAL" => Some(Type::Number),
         "IP" => Some(Type::IP),
         "DURATION" => Some(Type::Duration),
-        "TIME" => Some(Type::Duration),
+        "TIME" => Some(Type::Time),
         "BYTES" => Some(Type::String), // for now
         "BLOB" => Some(Type::Blob),
         "BACKEND" => Some(Type::Backend),
@@ -158,7 +158,6 @@ fn parse_type<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<
         "HTTP" => Some(Type::Obj(Default::default())), // for now
         "HEADER" => Some(Type::String),
         "ENUM" => {
-            // TODO: consume enum values
             let mut values = vec![];
 
             assert_eq!(toks.next(), Some("{"), "expected enum values");

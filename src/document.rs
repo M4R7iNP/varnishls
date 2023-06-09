@@ -65,13 +65,16 @@ pub struct LintError {
 
 pub type NestedPos = Vec<(usize, usize)>;
 
-// reserved keywords, without top-level only declarations
+// Reserved keywords: words you can't name e.g. a backend, subroutine etc.
 const RESERVED_KEYWORDS: &[&str] = &[
-    "if", "set", "new", "call", "else", "elsif", "unset", "include", "return",
+    "if", "set", "new", "call", "else", "elsif", "unset", "include", "return", "sub", "acl",
+    "backend", // "probe", // FIXME: probe is a valid field name
+    "req", "resp", "bereq", "beresp", "client", "server",
 ];
 
 pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::VARIABLE,
+    SemanticTokenType::PROPERTY,
     SemanticTokenType::FUNCTION,
     SemanticTokenType::KEYWORD,
     SemanticTokenType::STRING,
@@ -81,7 +84,6 @@ pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::PARAMETER,
     SemanticTokenType::REGEXP,
     SemanticTokenType::NUMBER,
-    SemanticTokenType::PROPERTY,
     // SemanticTokenType::new("delimiter"),
 ];
 
@@ -218,7 +220,7 @@ impl Document {
         self.ast = new_new_ast;
     }
 
-    fn edit_fulltext(&mut self, _version: i32, text: String) {
+    pub fn edit_fulltext(&mut self, _version: i32, text: String) {
         let rope = Rope::from(text.clone());
         let ast = self.parser.lock().unwrap().parse(&text, None).unwrap();
         self.rope = rope;
@@ -640,7 +642,8 @@ impl Document {
                                 continue;
                             };
                             arg_value_node = _arg_value_node;
-                            let arg_name = get_node_text(&self.rope, &arg_name_node);
+                            let arg_name =
+                                &self.rope.byte_slice(arg_name_node.byte_range()).to_string();
                             let Some(_arg) = func
                                 .args
                                 .iter()
@@ -704,7 +707,9 @@ impl Document {
                     }
                 }
                 "nested_ident" | "ident" => {
-                    let text = get_node_text(&self.rope, &node);
+                    // manually get ident text without get_node_text here, to check for reserved
+                    // keywords
+                    let text = self.rope.byte_slice(node.byte_range()).to_string();
                     if RESERVED_KEYWORDS.contains(&text.as_str()) {
                         add_error!("Reserved keyword");
                         continue;
@@ -714,6 +719,8 @@ impl Document {
                         continue;
                     }
 
+                    // check whether e.g. req/resp is allowed from this builtin subroutine
+                    // TODO: check where custom subroutines are called from
                     let toplev_decl = get_toplev_declaration_from_node(node);
                     if toplev_decl.kind() == "sub_declaration" {
                         if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {

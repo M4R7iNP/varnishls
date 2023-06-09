@@ -21,6 +21,7 @@ pub enum Type {
     String,
     Number,
     Duration,
+    Time,
     Bool,
     Acl,
     Sub,
@@ -36,16 +37,12 @@ impl Type {
     }
 
     pub fn can_this_cast_into(&self, other: &Self) -> bool {
-        match self {
-            Type::String | Type::Number | Type::Duration | Type::IP => match other {
-                Type::String | Type::Number | Type::Duration | Type::IP => {
-                    return true;
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        discriminant(self) == discriminant(other)
+        // anything can cast into string (probably)
+        matches!(other, Type::String) ||
+            // string can cast into number and ip
+            (matches!(self, Type::String) && matches!(other, Type::Number | Type::IP)) ||
+            // match same type
+            discriminant(self) == discriminant(other)
     }
 }
 
@@ -67,6 +64,7 @@ impl std::fmt::Display for Type {
             Type::String => write!(f, "STRING"),
             Type::Number => write!(f, "NUMBER"),
             Type::Duration => write!(f, "DURATION"),
+            Type::Time => write!(f, "TIME"),
             Type::Bool => write!(f, "BOOL"),
             Type::Acl => write!(f, "ACL"),
             Type::Sub => write!(f, "SUBROUTINE"),
@@ -590,7 +588,7 @@ pub fn get_varnish_builtins() -> Definitions {
         ..Func::default()
     });
 
-    let now = Type::Number; // TODO: time
+    let now = Type::Time;
 
     Definitions {
         #[rustfmt::skip]

@@ -62,6 +62,8 @@ impl Backend {
         let mut cache = self.cache.write().await;
 
         let documents_from_main_in_order = {
+            let mut docs = vec![];
+
             if let Some(ref main_vcl_path) = config.main_vcl {
                 // make root url the main vcl url without the filename
                 let root_uri = root_uri
@@ -75,13 +77,18 @@ impl Backend {
                     .unwrap()
                     .to_string_lossy()
                     .to_string();
-                get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_path, &vec![])
-            } else {
-                doc_map
-                    .get(src_doc_url)
-                    .map(|doc| vec![doc])
-                    .unwrap_or(vec![])
+
+                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_path, &vec![])
             }
+
+            // if this doc is not included from main vcl, just append it
+            if !docs.iter().any(|doc| &doc.url == src_doc_url) {
+                if let Some(doc) = doc_map.get(src_doc_url) {
+                    docs.push(doc);
+                }
+            }
+
+            docs
         };
 
         // gather all vmod imports, but only keep the first of each unique vmod
@@ -159,7 +166,12 @@ impl Backend {
             let include_file_path_str = include_file_path.to_string_lossy().to_string();
             let doc_already_exists = {
                 let map = self.document_map.read().await;
-                map.contains_key(&include_uri)
+                if let Some(doc) = map.get(&include_uri) {
+                    // Update doc if nested position from main document is changed
+                    doc.pos_from_main_doc.as_ref() == Some(&include.nested_pos)
+                } else {
+                    false
+                }
             };
             if doc_already_exists {
                 continue;
@@ -180,7 +192,13 @@ impl Backend {
             let included_doc =
                 Document::new(include_uri.clone(), file, Some(include.nested_pos.clone()));
             let mut doc_map = self.document_map.write().await;
-            includes_to_process.append(&mut included_doc.get_includes(&include.nested_pos).into());
+            // Wipe cache for this nested doc and read includes.
+            let mut cache_entry = CacheEntry::default();
+            let nested_includes = included_doc.get_includes(&include.nested_pos);
+            cache_entry.includes = Some(nested_includes.clone());
+            includes_to_process.append(&mut nested_includes.into());
+            let mut cache = self.cache.write().await;
+            cache.insert(included_doc.url.clone(), cache_entry);
             doc_map.insert(include_uri.clone(), included_doc);
         }
     }
@@ -271,7 +289,7 @@ impl LanguageServer for Backend {
 
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
-                    trigger_characters: Some(vec![".".to_string(), " ".to_string()]),
+                    trigger_characters: Some(vec![".".into(), " ".into(), "(".into()]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
                     completion_item: None,
@@ -307,7 +325,6 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
-                // definition: Some(GotoCapability::default()),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
@@ -329,19 +346,21 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        debug!("did_open()");
+        debug!("did_open({})", params.text_document.uri);
         let uri = params.text_document.uri;
-        let exists = {
-            let doc_map = self.document_map.read().await;
-            doc_map.contains_key(&uri)
-        };
-        if !exists {
-            let document = Document::new(uri.to_owned(), params.text_document.text, None);
+        let mut doc_map = self.document_map.write().await;
+        if let Some(doc) = doc_map.get_mut(&uri) {
+            let version = params.text_document.version;
+            doc.edit_fulltext(version, params.text_document.text);
 
-            let mut doc_map = self.document_map.write().await;
+            // clear cache
+            let mut cache = self.cache.write().await;
+            cache.remove(&uri);
+        } else {
+            let document = Document::new(uri.to_owned(), params.text_document.text, None);
             doc_map.insert(uri.clone(), document);
-            drop(doc_map);
         }
+        drop(doc_map); // unlock lock
 
         let config = self.config.read().await;
         let scope = self.get_all_definitions_across_all_documents(&uri).await;
@@ -356,7 +375,7 @@ impl LanguageServer for Backend {
             .await;
 
         let includes = doc.get_includes(doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]));
-        drop(doc_map); // drop reference, unlocks lock
+        drop(doc_map); // unlocks lock
         self.read_new_includes(uri, includes).await;
         self.client
             .log_message(MessageType::INFO, "All included files are imported")
@@ -620,11 +639,11 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
+        debug!("document_symbol({})", uri);
         let cache = self.cache.read().await;
         let Some(cache_entry) = cache.get(&uri) else {
-            let mut err = Error::internal_error();
-            err.message = "Document not found in cache".to_string();
-            return Result::Err(err);
+            error!("Document not found in cache: {}", uri);
+            return Ok(None);
         };
 
         let Some(ref defs) = cache_entry.definitions else {
