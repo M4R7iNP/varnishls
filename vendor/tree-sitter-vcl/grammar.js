@@ -269,6 +269,7 @@ module.exports = grammar({
           'lookup',
           'error',
           'purge',
+          'fetch',
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
       ),

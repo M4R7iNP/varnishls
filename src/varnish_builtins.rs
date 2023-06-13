@@ -346,6 +346,10 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("probe", Type::Probe),
         ("max_connections", Type::String),
         ("proxy_header", Type::String),
+        // 7.0 fields
+        ("via", Type::Backend),
+        ("preamble", Type::Blob),
+        ("authority", Type::String),
     ])
 }
 
@@ -487,6 +491,15 @@ pub fn get_varnish_builtins() -> Definitions {
             ("age".to_string(), Type::Duration),
             ("hits".to_string(), Type::Number),
             ("uncacheable".to_string(), Type::Bool),
+            (
+                "http".to_string(),
+                Type::Obj(Obj {
+                    name: "obj.http".to_string(),
+                    read_only: false,
+                    is_http_headers: true,
+                    ..Default::default()
+                }),
+            ),
         ]),
         ..Obj::default()
     });
