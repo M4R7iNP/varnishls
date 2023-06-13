@@ -328,6 +328,7 @@ impl Document {
                 recurse = true;
             } else if cursor.goto_parent() {
                 recurse = false;
+                continue;
             } else {
                 break;
             }
