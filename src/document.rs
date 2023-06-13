@@ -36,9 +36,8 @@ pub struct Document {
 
 #[derive(Debug, Clone)]
 pub struct Include {
-    pub path_str: String,
+    pub uri: Url,
     pub nested_pos: NestedPos,
-    pub doc_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -820,7 +819,7 @@ impl Document {
         imports
     }
 
-    pub fn get_includes(&self, nested_pos: &NestedPos) -> Vec<Include> {
+    pub fn get_includes(&self, root_uri: &Url, nested_pos: &NestedPos) -> Vec<Include> {
         let q = Query::new(
             self.ast.language(),
             "(include_declaration (string) @string)",
@@ -835,14 +834,16 @@ impl Document {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 let text = get_node_text(&self.rope, &capture.node);
-                let path = text.trim_matches('"').to_string();
+                let path = text.trim_matches('"');
+                let uri = if path.starts_with("./") || path.starts_with("../") {
+                    // relative to current vcl
+                    self.url.join(path).unwrap()
+                } else {
+                    root_uri.join(path).unwrap()
+                };
                 let mut nested_pos = nested_pos.clone();
                 nested_pos.push((range.start_point.row, range.start_point.column));
-                includes.push(Include {
-                    path_str: path,
-                    nested_pos,
-                    doc_url: Some(self.url.to_string()),
-                });
+                includes.push(Include { uri, nested_pos });
             }
         }
 
@@ -1767,23 +1768,34 @@ backend localhost {
     #[test]
     fn lists_all_includes() {
         let doc = Document::new(
-            Url::parse("file:///test.vcl").unwrap(),
+            Url::parse("file:///etc/varnish/vg/varnish.vcl").unwrap(),
             r#"
 include "config/acl.vcl";
 sub vcl_recv {
-    if (req.url = "/health") {
+    if (req.url == "/health") {
         include "config/healthcheck.vcl";
+    }
+
+    if (req.http.host == "www.vg.no") {
+        include "./www_vg_no_routing.vcl";
     }
 }
 "#
             .to_string(),
             None,
         );
-        let result = doc.get_includes(&vec![]);
+        let result = doc.get_includes(&Url::parse("file:///etc/varnish/").unwrap(), &vec![]);
         println!("result: {:?}", result);
         assert_eq!(
-            result.iter().map(|inc| &inc.path_str).collect::<Vec<_>>(),
-            vec!["config/acl.vcl", "config/healthcheck.vcl"]
+            result
+                .iter()
+                .map(|inc| inc.uri.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "file:///etc/varnish/config/acl.vcl",
+                "file:///etc/varnish/config/healthcheck.vcl",
+                "file:///etc/varnish/vg/www_vg_no_routing.vcl",
+            ]
         );
     }
 

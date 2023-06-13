@@ -29,7 +29,7 @@ pub struct Backend {
     // pub document_map: DashMap<String, Document>,
     pub document_map: RwLock<HashMap<Url, Document>>,
     // pub root_path: Option<String>,
-    pub root_uri: RwLock<Option<Url>>,
+    pub root_uri: RwLock<Url>,
     pub config: RwLock<Config>,
     pub cache: RwLock<HashMap<Url, CacheEntry>>,
 }
@@ -39,7 +39,10 @@ impl Backend {
         Backend {
             client,
             document_map: Default::default(),
-            root_uri: Default::default(),
+            // root_uri: Default::default(),
+            root_uri: RwLock::new(
+                Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
+            ),
             config: Default::default(),
             cache: Default::default(),
         }
@@ -66,19 +69,10 @@ impl Backend {
 
             if let Some(ref main_vcl_path) = config.main_vcl {
                 // make root url the main vcl url without the filename
-                let root_uri = root_uri
-                    .as_ref()
-                    .unwrap()
-                    .join(&main_vcl_path.to_string_lossy())
-                    .unwrap();
-                // main_vcl_path is now just the filename
-                let main_vcl_path = main_vcl_path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
+                let root_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
 
-                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_path, &vec![])
+                // debug!("main vcl path in defs: {}", main_vcl_uri);
+                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &root_uri, &vec![])
             }
 
             // if this doc is not included from main vcl, just append it
@@ -95,13 +89,13 @@ impl Backend {
         let all_vmod_imports = documents_from_main_in_order
             .iter()
             .flat_map(|doc| {
-                let mut cache_entry = cache
+                let cache_entry = cache
                     .entry(doc.url.clone())
                     .or_insert_with(CacheEntry::default);
-                if cache_entry.vmod_imports.is_none() {
-                    cache_entry.vmod_imports = Some(doc.get_vmod_imports());
-                }
-                cache_entry.vmod_imports.clone().unwrap()
+                cache_entry
+                    .vmod_imports
+                    .get_or_insert_with(|| doc.get_vmod_imports())
+                    .clone()
             })
             .fold(vec![], |mut set, import| {
                 if !set.contains(&import) {
@@ -121,13 +115,13 @@ impl Backend {
             documents_from_main_in_order
                 .iter()
                 .flat_map(|doc| {
-                    let mut cache_entry = cache
+                    let cache_entry = cache
                         .entry(doc.url.clone())
                         .or_insert_with(CacheEntry::default);
-                    if cache_entry.definitions.is_none() {
-                        cache_entry.definitions = Some(doc.get_all_definitions(&definitions));
-                    }
-                    cache_entry.definitions.clone().unwrap()
+                    cache_entry
+                        .definitions
+                        .get_or_insert_with(|| doc.get_all_definitions(&definitions))
+                        .clone()
                 })
                 .map(|def| (def.ident_str.to_string(), def)),
         );
@@ -142,7 +136,7 @@ impl Backend {
 
     async fn set_root_uri(&self, uri: Url) {
         let mut w = self.root_uri.write().await;
-        *w = Some(uri);
+        *w = uri;
     }
 
     async fn set_config(&self, config: Config) {
@@ -154,14 +148,12 @@ impl Backend {
      * TODO: doc_uri should be «main vcl» uri unless the import starts with «./»
      * TODO: parallelize with tokio?
      */
-    async fn read_new_includes(&self, doc_uri: Url, includes: Vec<Include>) {
+    async fn read_new_includes(&self, includes: Vec<Include>) {
         debug!("read_new_includes()");
         let mut includes_to_process = VecDeque::from(includes);
 
         while let Some(include) = includes_to_process.pop_front() {
-            let Ok(include_uri) = doc_uri.join(&include.path_str) else {
-                continue;
-            };
+            let include_uri = include.uri;
             let include_file_path = include_uri.to_file_path().unwrap();
             let include_file_path_str = include_file_path.to_string_lossy().to_string();
             let doc_already_exists = {
@@ -194,7 +186,8 @@ impl Backend {
             let mut doc_map = self.document_map.write().await;
             // Wipe cache for this nested doc and read includes.
             let mut cache_entry = CacheEntry::default();
-            let nested_includes = included_doc.get_includes(&include.nested_pos);
+            let nested_includes =
+                included_doc.get_includes(&*self.root_uri.read().await, &include.nested_pos);
             cache_entry.includes = Some(nested_includes.clone());
             includes_to_process.append(&mut nested_includes.into());
             let mut cache = self.cache.write().await;
@@ -261,9 +254,9 @@ impl LanguageServer for Backend {
                     let includes = {
                         let doc_map = self.document_map.read().await;
                         let main_doc = doc_map.get(&main_vcl_url).unwrap();
-                        main_doc.get_includes(&vec![])
+                        main_doc.get_includes(&root_uri, &vec![])
                     };
-                    self.read_new_includes(main_vcl_url, includes).await;
+                    self.read_new_includes(includes).await;
                 }
             }
         }
@@ -374,9 +367,12 @@ impl LanguageServer for Backend {
             )
             .await;
 
-        let includes = doc.get_includes(doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]));
+        let includes = doc.get_includes(
+            &*self.root_uri.read().await,
+            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
+        );
         drop(doc_map); // unlocks lock
-        self.read_new_includes(uri, includes).await;
+        self.read_new_includes(includes).await;
         self.client
             .log_message(MessageType::INFO, "All included files are imported")
             .await;
@@ -415,9 +411,12 @@ impl LanguageServer for Backend {
             )
             .await;
 
-        let includes = doc.get_includes(doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]));
+        let includes = doc.get_includes(
+            &*self.root_uri.read().await,
+            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
+        );
         drop(doc_map); // drop reference, unlocks lock
-        self.read_new_includes(uri, includes).await;
+        self.read_new_includes(includes).await;
         debug!("did_change() done!");
     }
 
@@ -832,31 +831,26 @@ fn get_all_documents<'a>(
     doc_map: &'a HashMap<Url, Document>,
     cache: &mut HashMap<Url, CacheEntry>,
     root_uri: &Url,
-    doc_path: &str,
+    doc_uri: &Url,
     nested_pos: &NestedPos,
 ) -> Vec<&'a Document> {
-    let doc_url = root_uri.join(doc_path).unwrap();
-    let Some(main_doc) = doc_map.get(&doc_url) else {
-        debug!("Could not find document {}", doc_url);
+    let Some(main_doc) = doc_map.get(&doc_uri) else {
+        debug!("Could not find document {}", doc_uri);
         return vec![];
     };
 
     let mut docs = vec![main_doc];
-    let mut cache_entry = cache.entry(doc_url).or_insert_with(CacheEntry::default);
-    if cache_entry.includes.is_none() {
-        cache_entry.includes = Some(main_doc.get_includes(nested_pos));
-    }
-    let includes = cache_entry.includes.clone().unwrap();
+    let cache_entry = cache
+        .entry(doc_uri.clone())
+        .or_insert_with(CacheEntry::default);
+    let includes = cache_entry
+        .includes
+        .get_or_insert_with(|| main_doc.get_includes(root_uri, nested_pos))
+        .clone();
     let mut deep_includes = includes
         .iter()
         .flat_map(|include| {
-            get_all_documents(
-                doc_map,
-                cache,
-                root_uri,
-                &include.path_str,
-                &include.nested_pos,
-            )
+            get_all_documents(doc_map, cache, root_uri, &include.uri, &include.nested_pos)
         })
         .collect();
     docs.append(&mut deep_includes);
