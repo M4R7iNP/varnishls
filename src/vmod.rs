@@ -14,7 +14,7 @@ struct VmodDataCStruct {
     vrt_minor: u32,
     file_id: *const c_char,
     name: *const c_char,
-    func: *const u8,
+    func: *const c_char,
     func_len: i32,
     proto: *const c_char,
     json: *const c_char,
@@ -27,8 +27,6 @@ pub struct VmodData {
     pub vrt_minor: usize,
     pub file_id: String,
     pub name: String,
-    pub func: String,
-    pub func_len: usize,
     pub proto: String,
     pub json: String,
     pub abi: String,
@@ -289,10 +287,6 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
         }
         .to_string_lossy()
         .to_string(),
-        func: unsafe { CStr::from_ptr((file[(vmd.func as usize)..].as_ptr()) as *const c_char) }
-            .to_string_lossy()
-            .to_string(),
-        func_len: vmd.func_len as usize,
         proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const c_char) }
             .to_string_lossy()
             .to_string(),
