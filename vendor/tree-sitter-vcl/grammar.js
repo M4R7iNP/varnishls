@@ -75,9 +75,15 @@ module.exports = grammar({
         ';',
       ),
     vcl_version_declaration: $ => seq('vcl', $.number, ';'),
-    include_declaration: $ => seq('include', $.string),
+    include_declaration: $ =>
+      seq(
+        'include',
+        optional('+glob'), // added in 7.0
+        $.string,
+      ),
     include_declaration_with_semi: $ => seq($.include_declaration, ';'),
 
+    // properties for both backends and probes
     // quirk, probe .request can have a list of strings
     backend_property: $ =>
       seq(
@@ -88,15 +94,36 @@ module.exports = grammar({
             optional(
               seq(
                 '=',
-                field('right', optional(choice($.expr, $.string_list))),
-                ';',
+                choice(
+                  seq(
+                    field(
+                      'right',
+                      optional(
+                        choice(
+                          $.expr,
+                          $.string_list, // strings list is only for probe .request
+                        ),
+                      ),
+                    ),
+                    ';',
+                  ),
+                  field('right', $.inline_probe), // inline probe has cannot have a appending «;»
+                ),
               ),
             ),
           ),
         ),
       ),
-    acl_entry: $ => seq($.string, optional(seq('/', $.literal)), ';'),
+    acl_entry: $ =>
+      seq(
+        optional('!'),
+        $.string,
+        repeat(choice('+log', '+table', '-pedantic')), // 7.0
+        optional(seq('/', $.literal)),
+        ';',
+      ),
     string_list: $ => repeat2($.string),
+    inline_probe: $ => seq('{', repeat($.backend_property), '}'),
 
     stmt: $ => choice($.if_stmt, $._statements_with_semicolon),
 
@@ -164,7 +191,12 @@ module.exports = grammar({
         optional(
           seq(
             field('left', $.nested_ident),
-            optional(seq('=', field('right', choice($.expr, blank())))),
+            optional(
+              seq(
+                field('operator', choice('=', '+=', '*=', '/=')), // new operators in 7.0
+                field('right', choice($.expr, blank())),
+              ),
+            ),
           ),
         ),
       ),

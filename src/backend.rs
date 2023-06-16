@@ -834,7 +834,7 @@ fn get_all_documents<'a>(
     doc_uri: &Url,
     nested_pos: &NestedPos,
 ) -> Vec<&'a Document> {
-    let Some(main_doc) = doc_map.get(&doc_uri) else {
+    let Some(main_doc) = doc_map.get(doc_uri) else {
         debug!("Could not find document {}", doc_uri);
         return vec![];
     };

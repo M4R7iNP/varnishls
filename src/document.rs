@@ -476,7 +476,7 @@ impl Document {
 
                     let parent_parent_node_kind = node.parent().unwrap().kind();
                     let map = match parent_parent_node_kind {
-                        "probe_declaration" => get_probe_field_types(),
+                        "probe_declaration" | "inline_probe" => get_probe_field_types(),
                         _ => get_backend_field_types(),
                     };
 
@@ -1014,12 +1014,17 @@ impl Document {
         };
 
         let target_row = self.rope.line(target_point.row);
-        if matches!(
-            target_row.get_char(target_point.column),
-            None | Some('\n') | Some(',')
-        ) && target_point.column > 0
+        if target_point.column > 0
+            && matches!(
+                target_row.get_char(target_point.column),
+                None | Some('\n') | Some(',') | Some(')')
+            )
+            && !matches!(target_row.get_char(target_point.column - 1), Some('('))
         {
-            debug!("decrementing by one");
+            debug!(
+                "decrementing by one ({:?})",
+                target_row.get_char(target_point.column)
+            );
             target_point.column -= 1;
         }
 
@@ -1491,6 +1496,7 @@ pub fn node_to_type(node: &Node) -> Option<Type> {
         "number" => Some(Type::Number),
         "duration" => Some(Type::Duration),
         "bool" => Some(Type::Bool),
+        "inline_probe" => Some(Type::Probe),
         "literal" => node_to_type(&node.child(0)?),
         _ => None,
     }
@@ -1558,8 +1564,7 @@ sub vcl_recv {
             )
             .unwrap();
         println!("result: {:?}", result);
-        assert_eq!(result.len(), 1);
-        // assert_eq!(result[0].label, "http");
+        assert!(result.iter().any(|item| item.label == "http"));
     }
 
     #[test]

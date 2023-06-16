@@ -386,6 +386,11 @@ pub fn get_varnish_builtins() -> Definitions {
             ("grace".to_string(), Type::Duration),
             ("is_hitmiss".to_string(), Type::Bool),
             ("is_hitpass".to_string(), Type::Bool),
+            ("do_esi".to_string(), Type::Bool),
+            ("can_gzip".to_string(), Type::Bool),
+            ("hash_ignore_busy".to_string(), Type::Bool),
+            ("hash_always_miss".to_string(), Type::Bool),
+            ("xid".to_string(), Type::String),
         ]),
         ..Obj::default()
     });
@@ -504,6 +509,15 @@ pub fn get_varnish_builtins() -> Definitions {
         ..Obj::default()
     });
 
+    let sess: Type = Type::Obj(Obj {
+        name: "sess".to_string(),
+        properties: BTreeMap::from([
+            ("timeout_idle".to_string(), Type::Duration),
+            ("xid".to_string(), Type::String),
+        ]),
+        ..Obj::default()
+    });
+
     let client: Type = Type::Obj(Obj {
         name: "client".to_string(),
         read_only: true,
@@ -521,6 +535,26 @@ pub fn get_varnish_builtins() -> Definitions {
             ("ip".to_string(), Type::String),
             ("hostname".to_string(), Type::String),
             ("identity".to_string(), Type::String),
+        ]),
+        ..Obj::default()
+    });
+
+    let local: Type = Type::Obj(Obj {
+        name: "local".to_string(),
+        read_only: true,
+        properties: BTreeMap::from([
+            ("ip".to_string(), Type::String),
+            ("endpoint".to_string(), Type::String),
+            ("socket".to_string(), Type::String),
+        ]),
+        ..Obj::default()
+    });
+
+    let remote: Type = Type::Obj(Obj {
+        name: "remote".to_string(),
+        read_only: true,
+        properties: BTreeMap::from([
+            ("ip".to_string(), Type::String),
         ]),
         ..Obj::default()
     });
@@ -611,8 +645,11 @@ pub fn get_varnish_builtins() -> Definitions {
             ("resp".into(),      Definition::new_builtin("resp".into(),      resp     )),
             ("beresp".into(),    Definition::new_builtin("beresp".into(),    beresp   )),
             ("obj".into(),       Definition::new_builtin("obj".into(),       obj      )),
+            ("sess".into(),      Definition::new_builtin("sess".into(),      sess     )),
             ("client".into(),    Definition::new_builtin("client".into(),    client   )),
             ("server".into(),    Definition::new_builtin("server".into(),    server   )),
+            ("local".into(),     Definition::new_builtin("local".into(),     local    )),
+            ("remote".into(),    Definition::new_builtin("remote".into(),    remote   )),
             ("regsub".into(),    Definition::new_builtin("regsub".into(),    regsub   )),
             ("regsuball".into(), Definition::new_builtin("regsuball".into(), regsuball)),
             ("synthetic".into(), Definition::new_builtin("synthetic".into(), synthetic)),
