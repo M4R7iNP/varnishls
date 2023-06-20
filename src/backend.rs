@@ -39,7 +39,6 @@ impl Backend {
         Backend {
             client,
             document_map: Default::default(),
-            // root_uri: Default::default(),
             root_uri: RwLock::new(
                 Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
             ),
@@ -68,11 +67,8 @@ impl Backend {
             let mut docs = vec![];
 
             if let Some(ref main_vcl_path) = config.main_vcl {
-                // make root url the main vcl url without the filename
-                let root_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-
-                // debug!("main vcl path in defs: {}", main_vcl_uri);
-                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &root_uri, &vec![])
+                let main_vcl_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
+                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_uri, &vec![])
             }
 
             // if this doc is not included from main vcl, just append it
@@ -226,37 +222,50 @@ impl LanguageServer for Backend {
         let root_uri = init_params.root_uri;
         // TODO: consider not initializing if uri scheme is not file
 
-        if let Some(root_uri) = root_uri {
+        if let Some(mut root_uri) = root_uri {
+            // Fix workspace directory missing slash
+            if !root_uri.path().ends_with('/') {
+                root_uri.set_path(format!("{}/", root_uri.path()).as_str());
+            }
             self.set_root_uri(root_uri.clone()).await;
 
             if root_uri.scheme() == "file" {
-                let mut root_uri = root_uri;
-                /*
-                 * Fix workspace directory missing slash
-                 */
-                if !root_uri.path().ends_with('/') {
-                    let root_path = root_uri.to_file_path().unwrap();
-                    if root_path.as_path().is_dir() {
-                        root_uri.set_path(format!("{}/", root_uri.path()).as_str());
-                        self.set_root_uri(root_uri.clone()).await;
-                    }
-                }
-
                 let config = read_config(&root_uri.to_file_path().unwrap()).await;
                 if let Some(config) = config {
+                    let mut root_uri = root_uri;
                     self.set_config(config).await;
-                }
+                    let mut config = self.config.write().await;
 
-                let config = self.config.read().await;
-                if let Some(ref main_vcl_path) = config.main_vcl {
-                    let main_vcl_url = root_uri.join(main_vcl_path.to_str().unwrap()).unwrap();
-                    self.read_doc_from_path(&main_vcl_url, Some(vec![])).await;
-                    let includes = {
-                        let doc_map = self.document_map.read().await;
-                        let main_doc = doc_map.get(&main_vcl_url).unwrap();
-                        main_doc.get_includes(&root_uri, &vec![])
-                    };
-                    self.read_new_includes(includes).await;
+                    if let Some(ref main_vcl_path) = config.main_vcl {
+                        // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
+                        if let Some(main_vcl_parent_path) = main_vcl_path
+                            .parent()
+                            .map(|path| path.to_string_lossy())
+                            .filter(|path| path != "")
+                        {
+                            // add main_vcl_parent_path to root_uri
+                            root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
+                            // Fix workspace directory missing slash
+                            if !root_uri.path().ends_with('/') {
+                                root_uri.set_path(format!("{}/", root_uri.path()).as_str());
+                            }
+                            self.set_root_uri(root_uri.clone()).await;
+                            // replace main_vcl with filename only
+                            config.main_vcl =
+                                Some(PathBuf::from(main_vcl_path.file_name().unwrap()));
+                        }
+                    }
+
+                    if let Some(ref main_vcl_path) = config.main_vcl {
+                        let main_vcl_url = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
+                        self.read_doc_from_path(&main_vcl_url, Some(vec![])).await;
+                        let includes = {
+                            let doc_map = self.document_map.read().await;
+                            let main_doc = doc_map.get(&main_vcl_url).unwrap();
+                            main_doc.get_includes(&root_uri, &vec![])
+                        };
+                        self.read_new_includes(includes).await;
+                    }
                 }
             }
         }
@@ -711,11 +720,8 @@ async fn read_config(root_path: &Path) -> Option<Config> {
         return None;
     }
     let config_str = tokio::fs::read_to_string(config_path).await;
-    if let Ok(config_str) = config_str {
-        let config = toml::from_str(&config_str);
-        return Some(config.unwrap());
-    }
-    None
+    let config_str = config_str.ok()?;
+    toml::from_str(&config_str).ok()
 }
 
 async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definitions {
