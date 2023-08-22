@@ -37,7 +37,7 @@ jobs:
             binary_postfix: ""
 
           - build: macos-arm-64
-            os: macos-11
+            os: macos-latest
             toolchain: nightly
             target: aarch64-apple-darwin
             binary_postfix: ""
