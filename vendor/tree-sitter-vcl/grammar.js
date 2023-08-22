@@ -261,8 +261,11 @@ module.exports = grammar({
     string: () =>
       token(
         choice(
-          // seq('"', /[^"]*/, '"'),
-          seq('"', /([^\"]*(\\"|\\)?)*/, '"'),
+          // triple-quoted multiline strings
+          seq('"""', /(([^"]+?")+?")+?"/),
+          // normal strings (not multiline)
+          seq('"', /([^\"\u000A\u000D]*(\\"|\\)?)*/, '"'),
+          // multiline strings encapsulated with curly braces
           seq('{"', /[^"]*"+([^}"][^"]*"+)*/, '}'),
         ),
       ),
