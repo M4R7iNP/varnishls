@@ -18,7 +18,13 @@ make build
 main_vcl = "vg/varnish.vcl" # path to the main vcl file varnish uses
 vmod_paths = ["/usr/lib/varnish-plus/vmods/"] # paths to directories containing your vmods (.so binaries)
 vcc_paths = ["/usr/src/varnish-cache/lib/"] # paths to directories containing vcc files (vmod definition files)
+[lint]
+prefer_else_if = "hint"
+prefer_lowercase_headers = "hint"
+prefer_custom_headers_without_prefix = false
 ```
+
+Allowed levels for linting rules are error, warning, info, and hint. Set to false to disable a rule.
 
 NOTE: `vcc_paths` takes precedence over `vmod_paths` when searching for vmods, since vcc also has documentation.
 
@@ -56,13 +62,6 @@ vim.filetype.add({ extension = { vcl = 'vcl', vtc = 'vtc' } })
 ```
 
 Run `:TSInstallFromGrammar vcl` after adding the nvim-treesitter config.
-
-### TODO:
-
-- Support for `.vcc` (Varnish VMOD definition files) and `.vtc` (Varnish test files) files
-- - Use the `.vcc` files for autocomplete with docs.
-- Build with Github Actions
-- When writing a subroutine, detect which builtin subroutine it's called from.
 
 ### Inspiration:
 

@@ -1,6 +1,8 @@
 use crate::{
     config::LintConfig,
-    parser, static_autocomplete_items,
+    parser,
+    safe_regex::{is_regex_safe, SafeRegexError},
+    static_autocomplete_items,
     varnish_builtins::{
         self, get_backend_field_types, get_probe_field_types, AutocompleteSearchOptions,
         Definition, Definitions, HasTypeProperties, Type,
@@ -31,7 +33,7 @@ pub struct Document {
     pub ast: Tree,
     pub url: Url,
     pub filetype: FileType,
-    pub pos_from_main_doc: Option<NestedPos>,
+    pub pos_from_main_doc: NestedPos,
 }
 
 #[derive(Debug, Clone)]
@@ -40,11 +42,14 @@ pub struct Include {
     pub nested_pos: NestedPos,
 }
 
+unsafe impl Send for Include {}
+unsafe impl Sync for Include {}
+
 #[derive(Debug, Clone)]
 pub struct VmodImport {
     pub name: String,
     pub loc: Location,
-    pub nested_pos: Option<NestedPos>,
+    pub nested_pos: NestedPos,
 }
 
 #[derive(Debug, Clone)]
@@ -67,8 +72,9 @@ pub type NestedPos = Vec<(usize, usize)>;
 // Reserved keywords: words you can't name e.g. a backend, subroutine etc.
 const RESERVED_KEYWORDS: &[&str] = &[
     "if", "set", "new", "call", "else", "elsif", "unset", "include", "return", "sub", "acl",
-    "backend", // "probe", // FIXME: probe is a valid field name
-    "req", "resp", "bereq", "beresp", "client", "server",
+    "backend",
+    // "probe", // FIXME: probe is a valid field name
+    // "req", "resp", "bereq", "beresp", "client", "server", // FIXME: actually valid identifier
 ];
 
 pub const LEGEND_TYPES: &[SemanticTokenType] = &[
@@ -127,7 +133,7 @@ impl Document {
             ast,
             url,
             filetype,
-            pos_from_main_doc: nested_pos,
+            pos_from_main_doc: nested_pos.unwrap_or_default(),
         }
     }
 
@@ -315,7 +321,7 @@ impl Document {
     // TO NOT CHECK: backends, subroutines
     pub fn get_error_ranges(
         &self,
-        global_scope: Definitions,
+        global_scope: &Definitions,
         config: &LintConfig,
     ) -> Vec<LintError> {
         let mut cursor = self.ast.walk();
@@ -343,6 +349,10 @@ impl Document {
                         },
                         severity: $severity,
                     });
+                };
+                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
+                    let range = ts_range_to_lsp_range($node.range());
+                    add_error!(range: range, severity: $severity, $($arg)+);
                 };
                 (node: $node:expr, $($arg:tt)+) => {
                     let range = ts_range_to_lsp_range($node.range());
@@ -398,7 +408,7 @@ impl Document {
                     };
 
                     let left_parts = left_ident_text.split('.').collect::<Vec<_>>();
-                    if vec!["req", "bereq", "resp", "beresp"].contains(&left_parts[0]) {
+                    if ["req", "bereq", "resp", "beresp"].contains(&left_parts[0]) {
                         // Deprecated headers (from MDN)
                         if matches!(left_parts.get(1), Some(&"http"))
                             && matches!(
@@ -439,14 +449,49 @@ impl Document {
 
                         // Rewriting req.url also changes the cache key, so requests hitting that
                         // cache key might get a different response that intended.
-                        if config.no_rewrite_req_url && left_ident_text.as_str() == "req.url" {
+                        if config.no_rewrite_req_url.is_enabled()
+                            && left_ident_text.as_str() == "req.url"
+                        {
                             let toplev_decl = get_toplev_declaration_from_node(node);
                             if toplev_decl.kind() == "sub_declaration" {
                                 if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
                                     let sub_name = get_node_text(&self.rope, &ident_node);
                                     if sub_name == "vcl_recv" {
-                                        add_hint!("[no_rewrite_req_url] Don't rewrite req.url. Rather, make a concious decision whether to edit the cache key or just the backend url.");
+                                        add_error!(
+                                            node: node,
+                                            severity: config.no_rewrite_req_url.lsp_severity().unwrap(),
+                                            "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a concious decision whether to edit the cache key or just the backend url."
+                                        );
                                     }
+                                }
+                            }
+                        }
+
+                        if config.prefer_lowercase_headers.is_enabled()
+                            && matches!(left_parts.get(1), Some(&"http"))
+                            && left_parts
+                                .get(2)
+                                .and_then(|header_name| header_name.find(char::is_uppercase))
+                                .is_some()
+                        {
+                            add_error!(
+                                node: node,
+                                severity: config.prefer_lowercase_headers.lsp_severity().unwrap(),
+                                "Prefer lowercase headeres"
+                            );
+                        }
+
+                        if config.prefer_custom_headers_without_prefix.is_enabled()
+                            && matches!(left_parts.get(1), Some(&"http"))
+                        {
+                            if let Some(hdr) = left_parts.get(2) {
+                                let hdr = hdr.to_lowercase();
+                                if hdr.starts_with("x-") && !hdr.starts_with("x-forwarded-") {
+                                    add_error!(
+                                        node: node,
+                                        severity: config.prefer_custom_headers_without_prefix.lsp_severity().unwrap(),
+                                        "Prefer custom headers without the «X-»-prefix"
+                                    );
                                 }
                             }
                         }
@@ -499,7 +544,8 @@ impl Document {
                         Some(r#type) => {
                             if right_node.kind() == "ident" {
                                 let right_ident = get_node_text(&self.rope, &right_node);
-                                let Some(ident_type) = global_scope.get_type_property(&right_ident) else {
+                                let Some(ident_type) = global_scope.get_type_property(&right_ident)
+                                else {
                                     add_error!(node: right_node, "Undefined value");
                                     continue;
                                 };
@@ -522,6 +568,20 @@ impl Document {
                                 add_error!("Expected {}, found {}", r#type, right_node_type);
                             }
                         }
+                    }
+                }
+                "elsif_stmt" => {
+                    let Some(keyword_node) = node.child_by_field_name("keyword") else {
+                        unreachable!("could not find keyword for elsif_stmt");
+                    };
+
+                    let keyword = self.rope.byte_slice(keyword_node.byte_range()).to_string();
+                    if config.prefer_else_if.is_enabled() && keyword != "else if" {
+                        add_error!(
+                            node: keyword_node,
+                            severity: config.prefer_else_if.lsp_severity().unwrap(),
+                            "Prefer «else if»"
+                        );
                     }
                 }
                 "call_stmt" => {
@@ -567,40 +627,38 @@ impl Document {
                     let ident_parts = full_ident.split('.').collect::<Vec<_>>();
                     // check first part exists (e.g. «brotli»)
                     let Some(definition) = global_scope.get(ident_parts[0]) else {
-                        add_error!("{} undefined", ident_parts[0]);
+                        add_error!(node: ident_node, "{} is undefined", ident_parts[0]);
                         continue;
                     };
 
                     // check it is defined above current line
-                    if let Some(ref doc_nested_pos) = self.pos_from_main_doc {
-                        let mut call_nested_pos = doc_nested_pos.clone();
-                        call_nested_pos.push(point_to_tuple(node.start_position()));
+                    let mut call_nested_pos = self.pos_from_main_doc.clone();
+                    call_nested_pos.push(point_to_tuple(node.start_position()));
 
-                        if let Some(ref nested_pos) = definition.nested_pos {
-                            if nested_pos.gt(&call_nested_pos) {
-                                let line = definition.loc.as_ref().unwrap().range.start.line;
-                                let filename = definition
-                                    .loc
-                                    .as_ref()
-                                    .and_then(|loc| {
-                                        loc.uri
-                                            .path_segments()
-                                            .and_then(|path_segments| path_segments.last())
-                                    })
-                                    .unwrap_or("<UNKNOWN>");
+                    if definition.nested_pos.gt(&call_nested_pos) {
+                        let line = definition.loc.as_ref().unwrap().range.start.line;
+                        let filename = definition
+                            .loc
+                            .as_ref()
+                            .and_then(|loc| {
+                                loc.uri
+                                    .path_segments()
+                                    .and_then(|path_segments| path_segments.last())
+                            })
+                            .unwrap_or("<UNKNOWN>");
 
-                                add_error!(
-                                    "{} is defined in {} at line {}",
-                                    ident_parts[0],
-                                    filename,
-                                    line + 1
-                                );
-                            }
-                        }
+                        add_error!(
+                            "{} is defined in {} at line {}",
+                            ident_parts[0],
+                            filename,
+                            line + 1
+                        );
                     }
 
                     // check method exists (init of brotli.init())
-                    let Some(Type::Func(func)) = global_scope.get_type_property_by_nested_idents(ident_parts) else {
+                    let Some(Type::Func(func)) =
+                        global_scope.get_type_property_by_nested_idents(ident_parts)
+                    else {
                         add_error!("{full_ident} is not a method");
                         continue;
                     };
@@ -636,18 +694,24 @@ impl Document {
                         let arg;
                         let arg_value_node;
                         if arg_node.kind() == "func_call_named_arg" {
-                            let Some(arg_name_node) = arg_node.child_by_field_name("arg_name") else { continue; };
-                            let Some(_arg_value_node) = arg_node.child_by_field_name("arg_value") else {
+                            let Some(arg_name_node) = arg_node.child_by_field_name("arg_name")
+                            else {
+                                continue;
+                            };
+                            let Some(_arg_value_node) = arg_node.child_by_field_name("arg_value")
+                            else {
                                 add_error!(node: arg_node, "Expected value");
                                 continue;
                             };
                             arg_value_node = _arg_value_node;
                             let arg_name =
                                 &self.rope.byte_slice(arg_name_node.byte_range()).to_string();
-                            let Some(_arg) = func
-                                .args
-                                .iter()
-                                .find(|arg| arg.name.as_ref().map(|name| name.eq(arg_name.as_str())).unwrap_or(false)) else {
+                            let Some(_arg) = func.args.iter().find(|arg| {
+                                arg.name
+                                    .as_ref()
+                                    .map(|name| name.eq(arg_name.as_str()))
+                                    .unwrap_or(false)
+                            }) else {
                                 add_error!(node: arg_node, "No such argument named {arg_name}");
                                 continue;
                             };
@@ -686,11 +750,15 @@ impl Document {
                                 "literal" | "ident" | "nested_ident"
                             ) {
                                 // check provided type can cast into argument type
-                                let Some(arg_value_type) = node_to_type(&arg_value_node).or_else(|| {
-                                    let ident = get_node_text(&self.rope, &arg_value_node);
-                                    let ident_parts = ident.split('.').collect::<Vec<_>>();
-                                    global_scope.get_type_property_by_nested_idents(ident_parts.clone()).cloned()
-                                }) else {
+                                let Some(arg_value_type) =
+                                    node_to_type(&arg_value_node).or_else(|| {
+                                        let ident = get_node_text(&self.rope, &arg_value_node);
+                                        let ident_parts = ident.split('.').collect::<Vec<_>>();
+                                        global_scope
+                                            .get_type_property_by_nested_idents(ident_parts.clone())
+                                            .cloned()
+                                    })
+                                else {
                                     add_error!(node: arg_value_node, "Not found");
                                     continue;
                                 };
@@ -765,6 +833,34 @@ impl Document {
                         }
                     }
                 }
+                "rmatch" | "nmatch" => {
+                    // right hand side is the regex
+                    let re_node = node
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .child_by_field_name("right");
+                    if let Some(re_node) = re_node {
+                        let re_str = get_node_text(&self.rope, &re_node);
+                        match is_regex_safe(re_str) {
+                            Err(SafeRegexError::ParseError) => {
+                                add_error!(node: re_node, "Regex might be invalid");
+                            }
+                            Err(SafeRegexError::StarHeightError) => {
+                                add_error!(node: re_node, severity: DiagnosticSeverity::WARNING, "Regex might be exponentially slow");
+                            }
+                            Err(SafeRegexError::TooManyRepititions) => {
+                                add_error!(
+                                    node: re_node,
+                                    severity: DiagnosticSeverity::WARNING,
+                                    "Regex might be slow (too many repititions)"
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -778,7 +874,7 @@ impl Document {
         lint_config: &LintConfig,
     ) -> Vec<Diagnostic> {
         return self
-            .get_error_ranges(global_scope, lint_config)
+            .get_error_ranges(&global_scope, lint_config)
             .iter()
             .map(|lint_error| Diagnostic {
                 range: lint_error.loc.range,
@@ -801,17 +897,15 @@ impl Document {
                 let ts_range = capture.node.range();
                 let name = get_node_text(&self.rope, &capture.node).to_string();
                 let range = ts_range_to_lsp_range(ts_range);
+                let mut nested_pos = self.pos_from_main_doc.clone();
+                nested_pos.push(point_to_tuple(ts_range.start_point));
                 imports.push(VmodImport {
                     name,
                     loc: Location {
                         uri: self.url.to_owned(),
                         range,
                     },
-                    nested_pos: self.pos_from_main_doc.as_ref().map(|pos| {
-                        let mut pos = pos.clone();
-                        pos.push((ts_range.end_point.row, ts_range.end_point.column));
-                        pos
-                    }),
+                    nested_pos,
                 });
             }
         }
@@ -819,7 +913,7 @@ impl Document {
         imports
     }
 
-    pub fn get_includes(&self, root_uri: &Url, nested_pos: &NestedPos) -> Vec<Include> {
+    pub fn get_includes(&self, root_uri: &Url) -> Vec<Include> {
         let q = Query::new(
             self.ast.language(),
             "(include_declaration (string) @string)",
@@ -841,8 +935,8 @@ impl Document {
                 } else {
                     root_uri.join(path).unwrap()
                 };
-                let mut nested_pos = nested_pos.clone();
-                nested_pos.push((range.start_point.row, range.start_point.column));
+                let mut nested_pos = self.pos_from_main_doc.clone();
+                nested_pos.push(point_to_tuple(range.start_point));
                 includes.push(Include { uri, nested_pos });
             }
         }
@@ -917,7 +1011,8 @@ impl Document {
                         .unwrap();
                     let def_text = get_node_text(&self.rope, &def_ident_capture.node);
                     let Some(r#type) = scope_with_vmods
-                        .get_type_property_by_nested_idents(def_text.split('.').collect()) else {
+                        .get_type_property_by_nested_idents(def_text.split('.').collect())
+                    else {
                         continue;
                     };
 
@@ -934,17 +1029,14 @@ impl Document {
                 _ => continue,
             };
 
+            let mut nested_pos = self.pos_from_main_doc.clone();
+            nested_pos.push(point_to_tuple(node_capture.node.start_position()));
+
             defs.push(Definition {
                 ident_str: text.to_string(),
                 r#type,
                 loc: Some(loc),
-                nested_pos: self.pos_from_main_doc.as_ref().map(|nested_pos| {
-                    let mut nested_pos = nested_pos.clone();
-                    // nested_pos.push(node_capture.node.range().into());
-                    let range = node_capture.node.range();
-                    nested_pos.push((range.start_point.row, range.start_point.column));
-                    nested_pos
-                }),
+                nested_pos,
             });
         }
 
@@ -1035,16 +1127,18 @@ impl Document {
         let mut must_be_writable = false;
         let mut keyword_suggestions = vec![];
 
-        /*
-        let narrowest_node = self
-            .ast
-            .root_node()
-            .descendant_for_point_range(target_point, target_point)?;
-        */
         let mut cursor = self.ast.root_node().walk();
-        // walk down, then up again
-        while cursor.goto_first_child_for_point(target_point).is_some() {}
-        debug!("cursor.node(): {:?}", cursor.node());
+        // Walk down the ast tree to the narrowest node (then up again later.)
+        while cursor.goto_first_child_for_point(target_point).is_some() {
+            let node = cursor.node();
+            let range = node.range();
+            if range.start_point > target_point || range.end_point < target_point {
+                cursor.goto_parent();
+                break;
+            }
+        }
+
+        // Move the cursor one node back if comma or end parenthesis
         if matches!(cursor.node().kind(), "," | ")") {
             // move cursor one point back
             if let Some(prev_sibling) = cursor.node().prev_sibling() {
@@ -1054,6 +1148,8 @@ impl Document {
                 }
             }
         }
+
+        // Walk up the tree from the narrowest node
         let mut stop = false;
         while !stop {
             let node = cursor.node();
@@ -1219,15 +1315,6 @@ impl Document {
                         }
                     }
                 }
-                "source_file" => {
-                    return Some(static_autocomplete_items::source_file());
-                }
-                "sub_declaration" | "if_stmt" | "elsif_stmt" | "else_stmt" => {
-                    if !text.contains('.') {
-                        keyword_suggestions.append(&mut static_autocomplete_items::subroutine());
-                    }
-                    stop = true;
-                }
                 _ => {
                     if parent_node.kind() == "new_stmt" || node.kind() == "new_stmt" {
                         match cursor.field_name() {
@@ -1252,6 +1339,15 @@ impl Document {
                     text = get_node_text(&self.rope, &node).to_string();
                     debug!("got text for ident {:?} {}", node, text);
                 }
+                "sub_declaration" | "if_stmt" | "elsif_stmt" | "else_stmt" => {
+                    if !text.contains('.') {
+                        keyword_suggestions.append(&mut static_autocomplete_items::subroutine());
+                    }
+                    stop = true;
+                }
+                "source_file" => {
+                    return Some(static_autocomplete_items::source_file());
+                }
                 _ => {}
             }
 
@@ -1266,7 +1362,6 @@ impl Document {
             }
         }
 
-        // debug!("jaggu: {:?}", search_type);
         debug!("text: «{:?}»", text);
 
         // identifiers written so far (split by dot)
@@ -1789,7 +1884,7 @@ sub vcl_recv {
             .to_string(),
             None,
         );
-        let result = doc.get_includes(&Url::parse("file:///etc/varnish/").unwrap(), &vec![]);
+        let result = doc.get_includes(&Url::parse("file:///etc/varnish/").unwrap());
         println!("result: {:?}", result);
         assert_eq!(
             result
@@ -1840,7 +1935,7 @@ sub vcl_init {
                         ..Default::default()
                     })),
                     loc: None,
-                    nested_pos: None,
+                    nested_pos: Default::default(),
                 },
             )]),
             ..Default::default()

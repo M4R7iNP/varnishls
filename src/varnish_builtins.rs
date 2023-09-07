@@ -41,6 +41,8 @@ impl Type {
         matches!(other, Type::String) ||
             // string can cast into number and ip
             (matches!(self, Type::String) && matches!(other, Type::Number | Type::IP)) ||
+            // number can cast into bool
+            (matches!(self, Type::Number) && matches!(other, Type::Bool)) ||
             // match same type
             discriminant(self) == discriminant(other)
     }
@@ -177,7 +179,7 @@ pub struct Definition {
     // pub line_num: usize,
     // pub doc_url: Option<String>,
     pub loc: Option<Location>,
-    pub nested_pos: Option<NestedPos>,
+    pub nested_pos: NestedPos,
 }
 
 impl Definition {
@@ -186,7 +188,7 @@ impl Definition {
             ident_str,
             r#type: Box::new(r#type),
             loc: None,
-            nested_pos: None,
+            nested_pos: Default::default(),
         }
     }
 }
@@ -341,7 +343,8 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("port", Type::Number), // can be string
         ("path", Type::String),
         ("host_header", Type::String),
-        ("connection_timeout", Type::Duration),
+        ("connect_timeout", Type::Duration),
+        ("first_byte_timeout", Type::Duration),
         ("between_bytes_timeout", Type::Duration),
         ("probe", Type::Probe),
         ("max_connections", Type::String),

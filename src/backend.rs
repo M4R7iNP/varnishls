@@ -1,6 +1,5 @@
 #![allow(deprecated)]
 use log::{debug, error};
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
@@ -23,12 +22,11 @@ pub struct CacheEntry {
     definitions: Option<Vec<Definition>>,
 }
 
+type DocumentMap = HashMap<Url, Document>;
+
 pub struct Backend {
-    pub client: Client,
-    // ast_map: DashMap<String, HashMap<String, Node>>,
-    // pub document_map: DashMap<String, Document>,
-    pub document_map: RwLock<HashMap<Url, Document>>,
-    // pub root_path: Option<String>,
+    pub client: Option<Client>,
+    pub document_map: RwLock<DocumentMap>,
     pub root_uri: RwLock<Url>,
     pub config: RwLock<Config>,
     pub cache: RwLock<HashMap<Url, CacheEntry>>,
@@ -37,7 +35,7 @@ pub struct Backend {
 impl Backend {
     pub fn new(client: Client) -> Backend {
         Backend {
-            client,
+            client: Some(client),
             document_map: Default::default(),
             root_uri: RwLock::new(
                 Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
@@ -54,7 +52,10 @@ impl Backend {
      * parse_vcc and parse_vmod both contains runtime assertions, so they
      * are ran in their own threads.
      */
-    async fn get_all_definitions_across_all_documents(&self, src_doc_url: &Url) -> Definitions {
+    pub async fn get_all_definitions_across_all_documents(
+        &self,
+        src_doc_url: Option<&Url>,
+    ) -> Definitions {
         debug!("get_all_definitions_across_all_documents()");
         let start = std::time::Instant::now();
         let config = self.config.read().await;
@@ -68,13 +69,17 @@ impl Backend {
 
             if let Some(ref main_vcl_path) = config.main_vcl {
                 let main_vcl_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_uri, &vec![])
+                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_uri)
+            } else if let Some(src_doc_url) = src_doc_url {
+                docs = get_all_documents(&doc_map, &mut cache, &root_uri, src_doc_url)
             }
 
             // if this doc is not included from main vcl, just append it
-            if !docs.iter().any(|doc| &doc.url == src_doc_url) {
-                if let Some(doc) = doc_map.get(src_doc_url) {
-                    docs.push(doc);
+            if let Some(src_doc_url) = src_doc_url {
+                if !docs.iter().any(|doc| &doc.url == src_doc_url) {
+                    if let Some(doc) = doc_map.get(src_doc_url) {
+                        docs.push(doc);
+                    }
                 }
             }
 
@@ -99,8 +104,6 @@ impl Backend {
                 }
                 set
             });
-
-        // debug!("all_vmod_imports: {all_vmod_imports:?}");
 
         // read all vmods
         let mut vmod_scope = read_all_vmods(all_vmod_imports, &config).await;
@@ -130,12 +133,12 @@ impl Backend {
         definitions
     }
 
-    async fn set_root_uri(&self, uri: Url) {
+    pub async fn set_root_uri(&self, uri: Url) {
         let mut w = self.root_uri.write().await;
         *w = uri;
     }
 
-    async fn set_config(&self, config: Config) {
+    pub async fn set_config(&self, config: Config) {
         let mut w = self.config.write().await;
         *w = config;
     }
@@ -144,7 +147,7 @@ impl Backend {
      * TODO: doc_uri should be «main vcl» uri unless the import starts with «./»
      * TODO: parallelize with tokio?
      */
-    async fn read_new_includes(&self, includes: Vec<Include>) {
+    pub async fn read_new_includes(&self, includes: Vec<Include>) {
         debug!("read_new_includes()");
         let mut includes_to_process = VecDeque::from(includes);
 
@@ -153,10 +156,16 @@ impl Backend {
             let include_file_path = include_uri.to_file_path().unwrap();
             let include_file_path_str = include_file_path.to_string_lossy().to_string();
             let doc_already_exists = {
-                let map = self.document_map.read().await;
-                if let Some(doc) = map.get(&include_uri) {
-                    // Update doc if nested position from main document is changed
-                    doc.pos_from_main_doc.as_ref() == Some(&include.nested_pos)
+                let mut map = self.document_map.write().await;
+                if let Some(doc) = map.get_mut(&include_uri) {
+                    // Update nested_pos if it doesn't match
+                    if doc.pos_from_main_doc != include.nested_pos {
+                        doc.pos_from_main_doc = include.nested_pos.clone();
+                        // ... do the same for nested includes
+                        includes_to_process
+                            .append(&mut doc.get_includes(&*self.root_uri.read().await).into());
+                    }
+                    true
                 } else {
                     false
                 }
@@ -167,12 +176,11 @@ impl Backend {
 
             let file = tokio::fs::read_to_string(&include_file_path_str).await;
             if let Err(err) = file {
-                self.client
-                    .log_message(
-                        MessageType::ERROR,
-                        format!("Failed to read file {} ({})", include_file_path_str, err),
-                    )
-                    .await;
+                self.log_error(format!(
+                    "Failed to read file {} ({})",
+                    include_file_path_str, err
+                ))
+                .await;
                 continue;
             }
 
@@ -182,8 +190,7 @@ impl Backend {
             let mut doc_map = self.document_map.write().await;
             // Wipe cache for this nested doc and read includes.
             let mut cache_entry = CacheEntry::default();
-            let nested_includes =
-                included_doc.get_includes(&*self.root_uri.read().await, &include.nested_pos);
+            let nested_includes = included_doc.get_includes(&*self.root_uri.read().await);
             cache_entry.includes = Some(nested_includes.clone());
             includes_to_process.append(&mut nested_includes.into());
             let mut cache = self.cache.write().await;
@@ -196,13 +203,8 @@ impl Backend {
         let file_path = doc_url.to_file_path().unwrap();
         let file = tokio::fs::read_to_string(&file_path).await;
         if let Err(err) = file {
-            self.client
-                .log_message(
-                    MessageType::ERROR,
-                    format!("Failed to read file {} ({})", doc_url, err),
-                )
+            self.log_error(format!("Failed to read file {} ({})", doc_url, err))
                 .await;
-
             return;
         }
 
@@ -211,8 +213,32 @@ impl Backend {
         let mut doc_map = self.document_map.write().await;
         doc_map.insert(doc_url.clone(), doc);
     }
+
+    async fn log_error(&self, message: String) {
+        match self.client {
+            Some(ref client) => {
+                client.log_message(MessageType::ERROR, message).await;
+            }
+            None => {
+                error!("{}", message);
+            }
+        }
+    }
 }
 
+impl Default for Backend {
+    fn default() -> Self {
+        Self {
+            client: None,
+            document_map: Default::default(),
+            root_uri: RwLock::new(
+                Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
+            ),
+            config: Default::default(),
+            cache: Default::default(),
+        }
+    }
+}
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
 
@@ -230,42 +256,40 @@ impl LanguageServer for Backend {
             self.set_root_uri(root_uri.clone()).await;
 
             if root_uri.scheme() == "file" {
-                let config = read_config(&root_uri.to_file_path().unwrap()).await;
-                if let Some(config) = config {
-                    let mut root_uri = root_uri;
-                    self.set_config(config).await;
-                    let mut config = self.config.write().await;
+                let config = read_config(&root_uri.to_file_path().unwrap()).await?;
 
-                    if let Some(ref main_vcl_path) = config.main_vcl {
-                        // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
-                        if let Some(main_vcl_parent_path) = main_vcl_path
-                            .parent()
-                            .map(|path| path.to_string_lossy())
-                            .filter(|path| path != "")
-                        {
-                            // add main_vcl_parent_path to root_uri
-                            root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
-                            // Fix workspace directory missing slash
-                            if !root_uri.path().ends_with('/') {
-                                root_uri.set_path(format!("{}/", root_uri.path()).as_str());
-                            }
-                            self.set_root_uri(root_uri.clone()).await;
-                            // replace main_vcl with filename only
-                            config.main_vcl =
-                                Some(PathBuf::from(main_vcl_path.file_name().unwrap()));
+                let mut root_uri = root_uri;
+                self.set_config(config).await;
+                let mut config = self.config.write().await;
+
+                if let Some(ref main_vcl_path) = config.main_vcl {
+                    // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
+                    if let Some(main_vcl_parent_path) = main_vcl_path
+                        .parent()
+                        .map(|path| path.to_string_lossy())
+                        .filter(|path| path != "")
+                    {
+                        // add main_vcl_parent_path to root_uri
+                        root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
+                        // Fix workspace directory missing slash
+                        if !root_uri.path().ends_with('/') {
+                            root_uri.set_path(format!("{}/", root_uri.path()).as_str());
                         }
+                        self.set_root_uri(root_uri.clone()).await;
+                        // replace main_vcl with filename only
+                        config.main_vcl = Some(PathBuf::from(main_vcl_path.file_name().unwrap()));
                     }
+                }
 
-                    if let Some(ref main_vcl_path) = config.main_vcl {
-                        let main_vcl_url = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-                        self.read_doc_from_path(&main_vcl_url, Some(vec![])).await;
-                        let includes = {
-                            let doc_map = self.document_map.read().await;
-                            let main_doc = doc_map.get(&main_vcl_url).unwrap();
-                            main_doc.get_includes(&root_uri, &vec![])
-                        };
-                        self.read_new_includes(includes).await;
-                    }
+                if let Some(ref main_vcl_path) = config.main_vcl {
+                    let main_vcl_url = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
+                    self.read_doc_from_path(&main_vcl_url, Some(vec![])).await;
+                    let includes = {
+                        let doc_map = self.document_map.read().await;
+                        let main_doc = doc_map.get(&main_vcl_url).unwrap();
+                        main_doc.get_includes(&root_uri)
+                    };
+                    self.read_new_includes(includes).await;
                 }
             }
         }
@@ -337,12 +361,6 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "initialized!")
-            .await;
-    }
-
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
@@ -365,10 +383,14 @@ impl LanguageServer for Backend {
         drop(doc_map); // unlock lock
 
         let config = self.config.read().await;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
         self.client
+            .as_ref()
+            .unwrap()
             .publish_diagnostics(
                 uri.clone(),
                 doc.diagnostics(scope, &config.lint),
@@ -376,13 +398,12 @@ impl LanguageServer for Backend {
             )
             .await;
 
-        let includes = doc.get_includes(
-            &*self.root_uri.read().await,
-            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
-        );
+        let includes = doc.get_includes(&*self.root_uri.read().await);
         drop(doc_map); // unlocks lock
         self.read_new_includes(includes).await;
         self.client
+            .as_ref()
+            .unwrap()
             .log_message(MessageType::INFO, "All included files are imported")
             .await;
     }
@@ -408,11 +429,15 @@ impl LanguageServer for Backend {
         }
 
         let config = self.config.read().await;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
 
         self.client
+            .as_ref()
+            .unwrap()
             .publish_diagnostics(
                 uri.clone(),
                 doc.diagnostics(scope, &config.lint),
@@ -420,24 +445,10 @@ impl LanguageServer for Backend {
             )
             .await;
 
-        let includes = doc.get_includes(
-            &*self.root_uri.read().await,
-            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
-        );
+        let includes = doc.get_includes(&*self.root_uri.read().await);
         drop(doc_map); // drop reference, unlocks lock
         self.read_new_includes(includes).await;
         debug!("did_change() done!");
-    }
-
-    async fn did_save(&self, _: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file saved!")
-            .await;
-    }
-    async fn did_close(&self, _: DidCloseTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file closed!")
-            .await;
     }
 
     async fn goto_definition(
@@ -448,7 +459,7 @@ impl LanguageServer for Backend {
         let doc_map = self.document_map.read().await;
         let src_doc = doc_map.get(&src_uri).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find source document".to_string(),
+            message: "Could not find source document".into(),
             data: None,
         })?;
         let position = params.text_document_position_params.position;
@@ -459,7 +470,7 @@ impl LanguageServer for Backend {
 
         let ident = src_doc.get_ident_at_point(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find ident".to_string(),
+            message: "Could not find ident".into(),
             data: None,
         })?;
 
@@ -499,7 +510,7 @@ impl LanguageServer for Backend {
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&src_uri).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find source document".to_string(),
+            message: "Could not find source document".into(),
             data: None,
         })?;
         let position = params.text_document_position.position;
@@ -510,7 +521,7 @@ impl LanguageServer for Backend {
 
         let ident = doc.get_ident_at_point(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find ident".to_string(),
+            message: "Could not find ident".into(),
             data: None,
         })?;
 
@@ -530,7 +541,9 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
         let completions = doc.autocomplete_for_pos(position, scope);
@@ -575,7 +588,9 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
         let doc_map = self.document_map.read().await;
         let doc = doc_map.get(&uri).unwrap();
         let pos = params.text_document_position_params.position;
@@ -679,49 +694,26 @@ impl LanguageServer for Backend {
                 .collect(),
         )))
     }
-
-    async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
-        self.client
-            .log_message(MessageType::INFO, "configuration changed!")
-            .await;
-    }
-
-    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
-        self.client
-            .log_message(MessageType::INFO, "workspace folders changed!")
-            .await;
-    }
-
-    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
-        self.client
-            .log_message(MessageType::INFO, "watched files have changed!")
-            .await;
-    }
-
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        self.client
-            .log_message(MessageType::INFO, "command executed!")
-            .await;
-
-        match self.client.apply_edit(WorkspaceEdit::default()).await {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
-            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
-        }
-
-        Ok(None)
-    }
 }
 
-async fn read_config(root_path: &Path) -> Option<Config> {
+pub async fn read_config(root_path: &Path) -> Result<Config> {
     let config_path_buf = root_path.join(PathBuf::from(".varnishls.toml"));
     let config_path = config_path_buf.as_path();
     if !config_path.exists() {
-        return None;
+        return Ok(Default::default());
     }
-    let config_str = tokio::fs::read_to_string(config_path).await;
-    let config_str = config_str.ok()?;
-    toml::from_str(&config_str).ok()
+    let config_str = tokio::fs::read_to_string(config_path)
+        .await
+        .map_err(|err| Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })?;
+    toml::from_str(&config_str).map_err(|err| Error {
+        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        message: err.to_string().into(),
+        data: None,
+    })
 }
 
 async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definitions {
@@ -817,9 +809,9 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
         if let Ok(Ok(Some(vmod))) = vmod_fut.await {
             let vmod_name = vmod.name;
             let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
-                    error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
-                    continue;
-                };
+                error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+                continue;
+            };
             let def = Definition {
                 ident_str: import.name.clone(),
                 r#type: Box::new(vmod.scope),
@@ -834,11 +826,10 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
 }
 
 fn get_all_documents<'a>(
-    doc_map: &'a HashMap<Url, Document>,
+    doc_map: &'a DocumentMap,
     cache: &mut HashMap<Url, CacheEntry>,
     root_uri: &Url,
     doc_uri: &Url,
-    nested_pos: &NestedPos,
 ) -> Vec<&'a Document> {
     let Some(main_doc) = doc_map.get(doc_uri) else {
         debug!("Could not find document {}", doc_uri);
@@ -851,13 +842,11 @@ fn get_all_documents<'a>(
         .or_insert_with(CacheEntry::default);
     let includes = cache_entry
         .includes
-        .get_or_insert_with(|| main_doc.get_includes(root_uri, nested_pos))
+        .get_or_insert_with(|| main_doc.get_includes(root_uri))
         .clone();
     let mut deep_includes = includes
         .iter()
-        .flat_map(|include| {
-            get_all_documents(doc_map, cache, root_uri, &include.uri, &include.nested_pos)
-        })
+        .flat_map(|include| get_all_documents(doc_map, cache, root_uri, &include.uri))
         .collect();
     docs.append(&mut deep_includes);
     docs
