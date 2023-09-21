@@ -11,6 +11,8 @@ pub struct Config {
     #[serde(default)]
     pub main_vcl: Option<PathBuf>,
     #[serde(default)]
+    pub vcl_paths: Vec<PathBuf>,
+    #[serde(default)]
     pub vmod_paths: Vec<PathBuf>,
     #[serde(default)]
     pub vcc_paths: Vec<PathBuf>,
@@ -22,6 +24,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             main_vcl: None,
+            vcl_paths: vec!["./".into()],
             vmod_paths: vec![
                 // ubuntu, debian
                 "/usr/lib/x86_64-linux-gnu/varnish/vmods/".into(),

@@ -151,21 +151,21 @@ async fn main() -> ExitCode {
             root_uri.set_path(format!("{}/", root_uri.path()).as_str());
             backend.set_root_uri(root_uri).await;
             let initial_include_uri =
-                Url::from_file_path(fs::canonicalize(file_path).await.unwrap()).unwrap();
+                Url::from_file_path(fs::canonicalize(file_path.clone()).await.unwrap()).unwrap();
             let initial_include = Include {
-                uri: initial_include_uri.clone(),
+                url: Some(initial_include_uri.clone()),
+                path: file_path,
                 nested_pos: Default::default(),
             };
-            let includes = [initial_include];
             backend.set_config(config.clone()).await;
-            backend.read_new_includes(includes.into()).await;
+            backend.read_new_includes(vec![initial_include]).await;
+            debug!("doc count {}", backend.document_map.iter().count());
 
             let scope = backend
                 .get_all_definitions_across_all_documents(Some(&initial_include_uri))
                 .await;
-            let doc_map = backend.document_map.read().await;
-            debug!("doc count {}", doc_map.values().count());
-            for doc in doc_map.values() {
+
+            for doc in backend.document_map.iter() {
                 let len_lines = doc.rope.len_lines();
                 // debug!("hei {}", doc.url);
                 let errors = doc.get_error_ranges(&scope, &config.lint);
@@ -208,6 +208,11 @@ async fn main() -> ExitCode {
                             if line_idx == start_line_idx
                                 && error.loc.range.start.line == error.loc.range.end.line
                             {
+                                let start = error.loc.range.start.character as usize;
+                                let end = error.loc.range.end.character as usize;
+                                let whitespace_offset = line.to_string()[0..start]
+                                    .replace(|c: char| !c.is_whitespace(), " ");
+
                                 print!(
                                     "{}",
                                     Colour::Cyan.paint(format!(
@@ -216,12 +221,8 @@ async fn main() -> ExitCode {
                                     ))
                                 );
                                 println!(
-                                    "{}{}",
-                                    " ".repeat(error.loc.range.start.character as usize),
-                                    Colour::Yellow.paint("^".repeat(
-                                        error.loc.range.end.character as usize
-                                            - error.loc.range.start.character as usize
-                                    ))
+                                    "{whitespace_offset}{}",
+                                    Colour::Yellow.paint("^".repeat(end - start))
                                 );
                             }
                         }

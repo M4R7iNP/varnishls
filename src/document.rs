@@ -11,8 +11,8 @@ use crate::{
 
 use log::debug;
 use ropey::{iter::Chunks, Rope};
-use std::iter::Iterator;
 use std::sync::{Arc, Mutex};
+use std::{cmp::Ordering, iter::Iterator, path::PathBuf};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
@@ -32,13 +32,15 @@ pub struct Document {
     pub rope: Rope,
     pub ast: Tree,
     pub url: Url,
+    pub path: Arc<PathBuf>,
     pub filetype: FileType,
     pub pos_from_main_doc: NestedPos,
 }
 
 #[derive(Debug, Clone)]
 pub struct Include {
-    pub uri: Url,
+    pub url: Option<Url>,
+    pub path: PathBuf,
     pub nested_pos: NestedPos,
 }
 
@@ -56,7 +58,7 @@ pub struct VmodImport {
 pub struct Reference {
     pub ident_str: String,
     pub line_num: usize,
-    pub doc_url: Option<String>,
+    pub doc_path: Arc<PathBuf>,
     pub uri: Location,
 }
 
@@ -131,6 +133,7 @@ impl Document {
             rope,
             parser,
             ast,
+            path: Arc::new(url.to_file_path().unwrap()),
             url,
             filetype,
             pos_from_main_doc: nested_pos.unwrap_or_default(),
@@ -327,6 +330,10 @@ impl Document {
         let mut cursor = self.ast.walk();
         let mut error_ranges = Vec::new();
         let mut recurse = true;
+        struct VarnishlsIgnore {
+            pub line: usize,
+        }
+        let mut varnishls_ignore: Option<VarnishlsIgnore> = None;
 
         loop {
             if (recurse && cursor.goto_first_child()) || cursor.goto_next_sibling() {
@@ -340,38 +347,42 @@ impl Document {
 
             let node = cursor.node();
             macro_rules! add_error {
-                (range: $range:expr, severity: $severity:expr, $($arg:tt)+) => {
+                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
+                    let range = ts_range_to_lsp_range($node.range());
                     error_ranges.push(LintError {
                         message: format!($($arg)+),
                         loc: Location {
                             uri: self.url.to_owned(),
-                            range: $range,
+                            range,
                         },
                         severity: $severity,
                     });
                 };
-                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range($node.range());
-                    add_error!(range: range, severity: $severity, $($arg)+);
-                };
                 (node: $node:expr, $($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range($node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range(node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 }
             }
 
             macro_rules! add_hint {
                 (node: $node:expr, $($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range($node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range(node.range());
-                    add_error!(range: range, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::HINT, $($arg)+);
+                }
+            }
+
+            // skip this node if ignored
+            if let Some(ignore) = varnishls_ignore.as_ref() {
+                match ignore.line.cmp(&node.start_position().row) {
+                    Ordering::Less => {
+                        varnishls_ignore = None;
+                    }
+                    Ordering::Equal => continue,
+                    Ordering::Greater => unreachable!(),
                 }
             }
 
@@ -460,7 +471,7 @@ impl Document {
                                         add_error!(
                                             node: node,
                                             severity: config.no_rewrite_req_url.lsp_severity().unwrap(),
-                                            "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a concious decision whether to edit the cache key or just the backend url."
+                                            "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a consious decision whether to edit the cache key or just the backend url."
                                         );
                                     }
                                 }
@@ -848,7 +859,11 @@ impl Document {
                                 add_error!(node: re_node, "Regex might be invalid");
                             }
                             Err(SafeRegexError::StarHeightError) => {
-                                add_error!(node: re_node, severity: DiagnosticSeverity::WARNING, "Regex might be exponentially slow");
+                                add_error!(
+                                    node: re_node,
+                                    severity: DiagnosticSeverity::WARNING,
+                                    "Regex might be exponentially slow"
+                                );
                             }
                             Err(SafeRegexError::TooManyRepititions) => {
                                 add_error!(
@@ -859,6 +874,14 @@ impl Document {
                             }
                             _ => {}
                         }
+                    }
+                }
+                "COMMENT" => {
+                    let content = get_node_text(&self.rope, &node);
+                    if content.contains("varnishls-ignore-next-line") {
+                        varnishls_ignore = Some(VarnishlsIgnore {
+                            line: node.end_position().row + 1,
+                        });
                     }
                 }
                 _ => {}
@@ -913,7 +936,7 @@ impl Document {
         imports
     }
 
-    pub fn get_includes(&self, root_uri: &Url) -> Vec<Include> {
+    pub fn get_includes(&self) -> Vec<Include> {
         let q = Query::new(
             self.ast.language(),
             "(include_declaration (string) @string)",
@@ -928,20 +951,34 @@ impl Document {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 let text = get_node_text(&self.rope, &capture.node);
-                let path = text.trim_matches('"');
-                let uri = if path.starts_with("./") || path.starts_with("../") {
+                let path_str = text.trim_matches('"');
+                let path = PathBuf::from(path_str);
+                let url = if path.starts_with("./") || path.starts_with("../") {
                     // relative to current vcl
-                    self.url.join(path).unwrap()
+                    self.url.join(path_str).ok()
                 } else {
-                    root_uri.join(path).unwrap()
+                    None
                 };
+
                 let mut nested_pos = self.pos_from_main_doc.clone();
                 nested_pos.push(point_to_tuple(range.start_point));
-                includes.push(Include { uri, nested_pos });
+                includes.push(Include {
+                    url,
+                    path,
+                    nested_pos,
+                });
             }
         }
 
         includes
+    }
+
+    pub fn to_include(&self) -> Include {
+        Include {
+            url: Some(self.url.to_owned()),
+            path: (*self.path).to_owned(),
+            nested_pos: self.pos_from_main_doc.to_owned(),
+        }
     }
 
     pub fn get_subroutines(&self) -> Vec<String> {
@@ -1077,7 +1114,7 @@ impl Document {
             refs.push(Reference {
                 ident_str: text.to_string(),
                 line_num,
-                doc_url: Some(self.url.to_string()),
+                doc_path: self.path.clone(),
                 uri: Location {
                     uri: self.url.to_owned(),
                     range: Range {
@@ -1552,6 +1589,22 @@ impl PartialEq for VmodImport {
 
 impl Eq for VmodImport {}
 
+impl Include {
+    pub fn resolve(mut self, vcl_paths: &[PathBuf]) -> Self {
+        if self.url.is_none() {
+            self.url = vcl_paths.iter().find_map(|search_path| {
+                let path = search_path.join(&self.path);
+                if path.exists() {
+                    Url::from_file_path(path).ok()
+                } else {
+                    None
+                }
+            });
+        }
+        self
+    }
+}
+
 // Misc helper functions
 
 fn point_to_position(point: Point) -> Position {
@@ -1884,17 +1937,36 @@ sub vcl_recv {
             .to_string(),
             None,
         );
-        let result = doc.get_includes(&Url::parse("file:///etc/varnish/").unwrap());
-        println!("result: {:?}", result);
+        let includes = doc.get_includes();
+        println!("includes: {:?}", includes);
         assert_eq!(
-            result
+            includes
                 .iter()
-                .map(|inc| inc.uri.to_string())
+                .map(|inc| inc.path.to_string_lossy())
                 .collect::<Vec<_>>(),
             vec![
-                "file:///etc/varnish/config/acl.vcl",
-                "file:///etc/varnish/config/healthcheck.vcl",
-                "file:///etc/varnish/vg/www_vg_no_routing.vcl",
+                "config/acl.vcl",
+                "config/healthcheck.vcl",
+                "./www_vg_no_routing.vcl",
+            ]
+        );
+
+        /*
+        let includes = includes
+            .into_iter()
+            .map(|include| include.resolve(&vec!["/etc/varnish/".into()].into()))
+            .collect::<Vec<_>>();
+        */
+
+        assert_eq!(
+            includes
+                .iter()
+                .map(|inc| inc.url.as_ref().map(|url| url.to_string()))
+                .collect::<Vec<_>>(),
+            vec![
+                None, // Some("file:///etc/varnish/acl.vcl".to_string()),
+                None, // Some("file:///etc/varnish/healthcheck.vcl".to_string()),
+                Some("file:///etc/varnish/vg/www_vg_no_routing.vcl".to_string()),
             ]
         );
     }

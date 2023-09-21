@@ -16,7 +16,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ropey = "1.6"
 tokio = { version = "1.17.0", features = ["full"] }
-tower-lsp = { version = "0.20", features = ["proposed"]}
+tower-lsp = { version = "0.20", features = ["proposed"] }
 # pest = "2.5.6"
 # pest_derive = "2.5.6"
 tree-sitter = "0.20"
@@ -28,6 +28,7 @@ clap = { version = "4.2.1", features = ["derive"] }
 toml = "0.7.3"
 regex-syntax = { version = "0.7", features = ["std"], default-features = false }
 ansi_term = "0.12.1"
+dashmap = { version = "5.5.3", features = ["inline"] }
 
 [build-dependencies]
 cc = "1.0"

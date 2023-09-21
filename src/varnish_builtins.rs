@@ -109,7 +109,7 @@ impl Definitions {
         };
         for ident in idents {
             let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
-                 return None;
+                return None;
             };
             scope = obj;
         }
@@ -127,7 +127,7 @@ impl Definitions {
         };
         for ident in idents {
             let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
-                 return None;
+                return None;
             };
             scope = obj;
         }
@@ -556,9 +556,7 @@ pub fn get_varnish_builtins() -> Definitions {
     let remote: Type = Type::Obj(Obj {
         name: "remote".to_string(),
         read_only: true,
-        properties: BTreeMap::from([
-            ("ip".to_string(), Type::String),
-        ]),
+        properties: BTreeMap::from([("ip".to_string(), Type::String)]),
         ..Obj::default()
     });
 
