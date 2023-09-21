@@ -18,6 +18,7 @@ make build
 main_vcl = "vg/varnish.vcl" # path to the main vcl file varnish uses
 vmod_paths = ["/usr/lib/varnish-plus/vmods/"] # paths to directories containing your vmods (.so binaries)
 vcc_paths = ["/usr/src/varnish-cache/lib/"] # paths to directories containing vcc files (vmod definition files)
+vcl_paths = ["./", "/usr/share/varnish-plus/vcl/"] # paths to directories containing vcl (default ./)
 [lint]
 prefer_else_if = "hint"
 prefer_lowercase_headers = "hint"
@@ -38,7 +39,7 @@ lsp_configs.varnishls = {
   default_config = {
     -- Change the path to varnishls (add --debug for debug log)
     cmd = { "/home/martin/varnishls/target/debug/varnishls", "lsp", "--stdio" },
-    filetypes = { "vcl" },
+    filetypes = { "vcl", "vtc" },
     root_dir = lspconfig.util.root_pattern(".varnishls.toml", ".git"),
     settings = {},
   }
@@ -69,3 +70,4 @@ Run `:TSInstallFromGrammar vcl` after adding the nvim-treesitter config.
 - [tower-lsp-boilerplate](https://github.com/IWANABETHATGUY/tower-lsp-boilerplate)
 - [prosemd-lsp](https://github.com/kitten/prosemd-lsp)
 - [svls](https://github.com/dalance/svls)
+- [deno lsp](https://github.com/denoland/deno/tree/main/cli/lsp)
