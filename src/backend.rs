@@ -1,7 +1,7 @@
 #![allow(deprecated)]
+use dashmap::DashMap;
 use log::{debug, error};
-use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use toml;
@@ -23,21 +23,21 @@ pub struct CacheEntry {
     definitions: Option<Vec<Definition>>,
 }
 
+type DocumentMap = DashMap<Url, Document>;
+
 pub struct Backend {
-    pub client: Client,
-    // ast_map: DashMap<String, HashMap<String, Node>>,
-    // pub document_map: DashMap<String, Document>,
-    pub document_map: RwLock<HashMap<Url, Document>>,
-    // pub root_path: Option<String>,
+    pub client: Option<Client>,
+    pub document_map: DocumentMap,
     pub root_uri: RwLock<Url>,
     pub config: RwLock<Config>,
-    pub cache: RwLock<HashMap<Url, CacheEntry>>,
+    /// cache to cache e.g. stat-ing includes and discovering definitions in all documents
+    pub cache: DashMap<Url, CacheEntry>,
 }
 
 impl Backend {
     pub fn new(client: Client) -> Backend {
         Backend {
-            client,
+            client: Some(client),
             document_map: Default::default(),
             root_uri: RwLock::new(
                 Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
@@ -54,43 +54,56 @@ impl Backend {
      * parse_vcc and parse_vmod both contains runtime assertions, so they
      * are ran in their own threads.
      */
-    async fn get_all_definitions_across_all_documents(&self, src_doc_url: &Url) -> Definitions {
+    pub async fn get_all_definitions_across_all_documents(
+        &self,
+        src_doc_url: Option<&Url>,
+    ) -> Definitions {
         debug!("get_all_definitions_across_all_documents()");
         let start = std::time::Instant::now();
         let config = self.config.read().await;
-        let doc_map = self.document_map.read().await;
         let root_uri = self.root_uri.read().await;
         let mut definitions = get_varnish_builtins();
-        let mut cache = self.cache.write().await;
 
         let documents_from_main_in_order = {
             let mut docs = vec![];
 
             if let Some(ref main_vcl_path) = config.main_vcl {
                 let main_vcl_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-                docs = get_all_documents(&doc_map, &mut cache, &root_uri, &main_vcl_uri, &vec![])
+                docs = get_all_documents(&self.document_map, &self.cache, &config, &main_vcl_uri);
+            } else if let Some(src_doc_url) = src_doc_url {
+                docs = get_all_documents(&self.document_map, &self.cache, &config, src_doc_url);
             }
 
             // if this doc is not included from main vcl, just append it
-            if !docs.iter().any(|doc| &doc.url == src_doc_url) {
-                if let Some(doc) = doc_map.get(src_doc_url) {
-                    docs.push(doc);
+            if let Some(src_doc_url) = src_doc_url {
+                if !docs.iter().any(|doc_url| doc_url == src_doc_url)
+                    && self.document_map.contains_key(src_doc_url)
+                {
+                    docs.push(src_doc_url.clone());
                 }
             }
+
+            // debug!("got {} docs", docs.len());
 
             docs
         };
 
         // gather all vmod imports, but only keep the first of each unique vmod
-        let all_vmod_imports = documents_from_main_in_order
+        let all_vmod_imports: Vec<VmodImport> = documents_from_main_in_order
             .iter()
-            .flat_map(|doc| {
-                let cache_entry = cache
-                    .entry(doc.url.clone())
+            .flat_map(|doc_url| -> Vec<VmodImport> {
+                let mut cache_entry = self
+                    .cache
+                    .entry((*doc_url).clone())
                     .or_insert_with(CacheEntry::default);
                 cache_entry
                     .vmod_imports
-                    .get_or_insert_with(|| doc.get_vmod_imports())
+                    .get_or_insert_with(|| {
+                        self.document_map
+                            .get(doc_url)
+                            .map(|doc| doc.get_vmod_imports())
+                            .unwrap_or_default()
+                    })
                     .clone()
             })
             .fold(vec![], |mut set, import| {
@@ -100,23 +113,27 @@ impl Backend {
                 set
             });
 
-        // debug!("all_vmod_imports: {all_vmod_imports:?}");
-
         // read all vmods
         let mut vmod_scope = read_all_vmods(all_vmod_imports, &config).await;
         definitions.properties.append(&mut vmod_scope.properties);
 
         // all objs (e.g. «new awdawd = new director.round_robin()»)
-        let mut temp_map = BTreeMap::from_iter(
+        let mut temp_map: BTreeMap<String, Definition> = BTreeMap::from_iter(
             documents_from_main_in_order
                 .iter()
-                .flat_map(|doc| {
-                    let cache_entry = cache
-                        .entry(doc.url.clone())
+                .flat_map(|doc_url| {
+                    let mut cache_entry = self
+                        .cache
+                        .entry((*doc_url).clone())
                         .or_insert_with(CacheEntry::default);
                     cache_entry
                         .definitions
-                        .get_or_insert_with(|| doc.get_all_definitions(&definitions))
+                        .get_or_insert_with(|| {
+                            self.document_map
+                                .get(doc_url)
+                                .map(|doc| doc.get_all_definitions(&definitions))
+                                .unwrap_or_default()
+                        })
                         .clone()
                 })
                 .map(|def| (def.ident_str.to_string(), def)),
@@ -130,12 +147,12 @@ impl Backend {
         definitions
     }
 
-    async fn set_root_uri(&self, uri: Url) {
+    pub async fn set_root_uri(&self, uri: Url) {
         let mut w = self.root_uri.write().await;
         *w = uri;
     }
 
-    async fn set_config(&self, config: Config) {
+    pub async fn set_config(&self, config: Config) {
         let mut w = self.config.write().await;
         *w = config;
     }
@@ -144,19 +161,35 @@ impl Backend {
      * TODO: doc_uri should be «main vcl» uri unless the import starts with «./»
      * TODO: parallelize with tokio?
      */
-    async fn read_new_includes(&self, includes: Vec<Include>) {
+    pub async fn read_new_includes(&self, initial_includes: Vec<Include>) {
         debug!("read_new_includes()");
-        let mut includes_to_process = VecDeque::from(includes);
+        let config = self.config.read().await;
+        let mut includes_to_process = VecDeque::from(initial_includes);
 
         while let Some(include) = includes_to_process.pop_front() {
-            let include_uri = include.uri;
-            let include_file_path = include_uri.to_file_path().unwrap();
-            let include_file_path_str = include_file_path.to_string_lossy().to_string();
+            let mut include = include;
+            if include.url.is_none() {
+                include = include.resolve(&config.vcl_paths);
+            }
+
+            // debug!("include: {:?}", include);
+            let Some(include_url) = include.url else {
+                continue;
+            };
+
             let doc_already_exists = {
-                let map = self.document_map.read().await;
-                if let Some(doc) = map.get(&include_uri) {
-                    // Update doc if nested position from main document is changed
-                    doc.pos_from_main_doc.as_ref() == Some(&include.nested_pos)
+                if let Some(doc) = self.document_map.get(&include_url) {
+                    // Update nested_pos if it doesn't match
+                    if doc.pos_from_main_doc != include.nested_pos {
+                        drop(doc);
+                        debug!("updating nested_pos");
+                        let mut doc = self.document_map.get_mut(&include_url).unwrap();
+                        doc.pos_from_main_doc = include.nested_pos.clone();
+                        // ... do the same for nested includes
+                        includes_to_process.append(&mut doc.get_includes().into());
+                        drop(doc);
+                    }
+                    true
                 } else {
                     false
                 }
@@ -165,54 +198,93 @@ impl Backend {
                 continue;
             }
 
-            let file = tokio::fs::read_to_string(&include_file_path_str).await;
-            if let Err(err) = file {
-                self.client
-                    .log_message(
-                        MessageType::ERROR,
-                        format!("Failed to read file {} ({})", include_file_path_str, err),
-                    )
-                    .await;
+            let Some(include_uri) = self
+                .read_doc_from_path(include.path.as_path(), include.nested_pos)
+                .await
+            else {
+                // error should already have been logged
                 continue;
-            }
+            };
 
-            let file = file.unwrap();
-            let included_doc =
-                Document::new(include_uri.clone(), file, Some(include.nested_pos.clone()));
-            let mut doc_map = self.document_map.write().await;
+            let Some(included_doc) = self.document_map.get(&include_uri) else {
+                continue;
+            };
+
             // Wipe cache for this nested doc and read includes.
             let mut cache_entry = CacheEntry::default();
-            let nested_includes =
-                included_doc.get_includes(&*self.root_uri.read().await, &include.nested_pos);
+            let nested_includes = included_doc
+                .get_includes()
+                .into_iter()
+                .map(|include| include.resolve(&config.vcl_paths))
+                .collect::<Vec<_>>();
             cache_entry.includes = Some(nested_includes.clone());
             includes_to_process.append(&mut nested_includes.into());
-            let mut cache = self.cache.write().await;
-            cache.insert(included_doc.url.clone(), cache_entry);
-            doc_map.insert(include_uri.clone(), included_doc);
+            self.cache.insert(included_doc.url.clone(), cache_entry);
         }
+        debug!("reading includes doneski");
     }
 
-    async fn read_doc_from_path(&self, doc_url: &Url, nested_pos: Option<NestedPos>) {
-        let file_path = doc_url.to_file_path().unwrap();
-        let file = tokio::fs::read_to_string(&file_path).await;
-        if let Err(err) = file {
-            self.client
-                .log_message(
-                    MessageType::ERROR,
-                    format!("Failed to read file {} ({})", doc_url, err),
-                )
+    async fn read_doc_from_path(&self, path: &Path, nested_pos: NestedPos) -> Option<Url> {
+        let config = self.config.read().await;
+        let Some(file_path) = config.vcl_paths.iter().find_map(|search_root_path| {
+            let search_path = search_root_path.join(path);
+            if search_path.as_path().exists() {
+                Some(search_path)
+            } else {
+                None
+            }
+        }) else {
+            self.log_error(format!(
+                "Could not find {}. Is it in config.vcl_paths?",
+                path.to_string_lossy()
+            ))
+            .await;
+            return None;
+        };
+
+        let file = match tokio::fs::read_to_string(&file_path).await {
+            Ok(file) => file,
+            Err(err) => {
+                self.log_error(format!(
+                    "Failed to read file {} ({err})",
+                    path.to_string_lossy()
+                ))
                 .await;
+                return None;
+            }
+        };
 
-            return;
+        let doc_url = Url::from_file_path(file_path).unwrap();
+        let doc = Document::new(doc_url.clone(), file, Some(nested_pos));
+        self.document_map.insert(doc_url.clone(), doc);
+        Some(doc_url)
+    }
+
+    async fn log_error(&self, message: String) {
+        match self.client {
+            Some(ref client) => {
+                client.log_message(MessageType::ERROR, message).await;
+            }
+            None => {
+                error!("{}", message);
+            }
         }
-
-        let file = file.unwrap();
-        let doc = Document::new(doc_url.clone(), file, nested_pos);
-        let mut doc_map = self.document_map.write().await;
-        doc_map.insert(doc_url.clone(), doc);
     }
 }
 
+impl Default for Backend {
+    fn default() -> Self {
+        Self {
+            client: None,
+            document_map: Default::default(),
+            root_uri: RwLock::new(
+                Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
+            ),
+            config: Default::default(),
+            cache: Default::default(),
+        }
+    }
+}
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
 
@@ -230,40 +302,44 @@ impl LanguageServer for Backend {
             self.set_root_uri(root_uri.clone()).await;
 
             if root_uri.scheme() == "file" {
-                let config = read_config(&root_uri.to_file_path().unwrap()).await;
-                if let Some(config) = config {
-                    let mut root_uri = root_uri;
-                    self.set_config(config).await;
-                    let mut config = self.config.write().await;
+                let mut root_uri = root_uri;
+                self.set_config(read_config(&root_uri.to_file_path().unwrap()).await?)
+                    .await;
+                let mut config = self.config.read().await;
 
-                    if let Some(ref main_vcl_path) = config.main_vcl {
-                        // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
-                        if let Some(main_vcl_parent_path) = main_vcl_path
-                            .parent()
-                            .map(|path| path.to_string_lossy())
-                            .filter(|path| path != "")
-                        {
-                            // add main_vcl_parent_path to root_uri
-                            root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
-                            // Fix workspace directory missing slash
-                            if !root_uri.path().ends_with('/') {
-                                root_uri.set_path(format!("{}/", root_uri.path()).as_str());
-                            }
-                            self.set_root_uri(root_uri.clone()).await;
-                            // replace main_vcl with filename only
+                if let Some(ref main_vcl_path) = config.main_vcl {
+                    // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
+                    if let Some(main_vcl_parent_path) = main_vcl_path
+                        .parent()
+                        .map(|path| path.to_string_lossy())
+                        .filter(|path| path != "")
+                    {
+                        // add main_vcl_parent_path to root_uri
+                        root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
+                        // Fix workspace directory missing slash
+                        if !root_uri.path().ends_with('/') {
+                            root_uri.set_path(format!("{}/", root_uri.path()).as_str());
+                        }
+                        self.set_root_uri(root_uri.clone()).await;
+                        // replace main_vcl with filename only
+                        config = {
+                            let mut config = config.clone();
                             config.main_vcl =
                                 Some(PathBuf::from(main_vcl_path.file_name().unwrap()));
+                            self.set_config(config).await;
+                            self.config.read().await
                         }
                     }
+                }
 
-                    if let Some(ref main_vcl_path) = config.main_vcl {
-                        let main_vcl_url = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-                        self.read_doc_from_path(&main_vcl_url, Some(vec![])).await;
+                if let Some(ref main_vcl_path) = config.main_vcl {
+                    if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
+                    {
                         let includes = {
-                            let doc_map = self.document_map.read().await;
-                            let main_doc = doc_map.get(&main_vcl_url).unwrap();
-                            main_doc.get_includes(&root_uri, &vec![])
+                            let main_doc = self.document_map.get(&main_vcl_url).unwrap();
+                            main_doc.get_includes()
                         };
+
                         self.read_new_includes(includes).await;
                     }
                 }
@@ -286,7 +362,6 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Left(false)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::INCREMENTAL,
-                    // TextDocumentSyncKind::FULL,
                 )),
 
                 completion_provider: Some(CompletionOptions {
@@ -337,54 +412,53 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "initialized!")
-            .await;
-    }
-
     async fn shutdown(&self) -> Result<()> {
-        Ok(())
+        std::process::exit(0);
+        // Ok(())
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         debug!("did_open({})", params.text_document.uri);
         let uri = params.text_document.uri;
-        let mut doc_map = self.document_map.write().await;
-        if let Some(doc) = doc_map.get_mut(&uri) {
+        if let Some(mut doc) = self.document_map.get_mut(&uri) {
             let version = params.text_document.version;
             doc.edit_fulltext(version, params.text_document.text);
 
             // clear cache
-            let mut cache = self.cache.write().await;
-            cache.remove(&uri);
+            self.cache.remove(&uri);
         } else {
             let document = Document::new(uri.to_owned(), params.text_document.text, None);
-            doc_map.insert(uri.clone(), document);
+            self.document_map.insert(uri.clone(), document);
         }
-        drop(doc_map); // unlock lock
 
         let config = self.config.read().await;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
-        let doc_map = self.document_map.read().await;
-        let doc = doc_map.get(&uri).unwrap();
+        let doc_includes = {
+            let doc = self.document_map.get(&uri).unwrap();
+            doc.get_includes()
+        };
+        self.read_new_includes(doc_includes).await;
+
         self.client
+            .as_ref()
+            .unwrap()
+            .log_message(MessageType::INFO, "All included files are imported")
+            .await;
+
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
+
+        let doc = self.document_map.get(&uri).unwrap();
+        self.client
+            .as_ref()
+            .unwrap()
             .publish_diagnostics(
                 uri.clone(),
                 doc.diagnostics(scope, &config.lint),
                 Some(doc.version()),
             )
             .await;
-
-        let includes = doc.get_includes(
-            &*self.root_uri.read().await,
-            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
-        );
-        drop(doc_map); // unlocks lock
-        self.read_new_includes(includes).await;
-        self.client
-            .log_message(MessageType::INFO, "All included files are imported")
-            .await;
+        debug!("did open done");
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -397,47 +471,39 @@ impl LanguageServer for Backend {
             .map(|change| (change.range, change.text));
 
         {
-            let mut doc_map = self.document_map.write().await;
-            let doc = doc_map.get_mut(&uri).unwrap();
+            debug!("updating doc");
+            let mut doc = self.document_map.get_mut(&uri).unwrap();
             doc.edit(version, changes);
         }
 
-        {
-            let mut cache = self.cache.write().await;
-            cache.remove(&uri);
-        }
+        debug!("clearing cache");
+        self.cache.remove(&uri);
 
         let config = self.config.read().await;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
-        let doc_map = self.document_map.read().await;
-        let doc = doc_map.get(&uri).unwrap();
 
-        self.client
-            .publish_diagnostics(
-                uri.clone(),
-                doc.diagnostics(scope, &config.lint),
-                Some(doc.version()),
-            )
+        {
+            let doc = self.document_map.get(&uri).unwrap();
+            let includes = doc.get_includes();
+            drop(doc);
+            self.read_new_includes(includes).await;
+        }
+
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
             .await;
 
-        let includes = doc.get_includes(
-            &*self.root_uri.read().await,
-            doc.pos_from_main_doc.as_ref().unwrap_or(&vec![]),
-        );
-        drop(doc_map); // drop reference, unlocks lock
-        self.read_new_includes(includes).await;
+        if let Some(doc) = self.document_map.try_get(&uri).try_unwrap() {
+            let diagnostics = doc.diagnostics(scope, &config.lint);
+            let version = doc.version();
+            drop(doc);
+            self.client
+                .as_ref()
+                .unwrap()
+                .publish_diagnostics(uri.clone(), diagnostics, Some(version))
+                .await;
+        }
+
         debug!("did_change() done!");
-    }
-
-    async fn did_save(&self, _: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file saved!")
-            .await;
-    }
-    async fn did_close(&self, _: DidCloseTextDocumentParams) {
-        self.client
-            .log_message(MessageType::INFO, "file closed!")
-            .await;
     }
 
     async fn goto_definition(
@@ -445,10 +511,9 @@ impl LanguageServer for Backend {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let src_uri = params.text_document_position_params.text_document.uri;
-        let doc_map = self.document_map.read().await;
-        let src_doc = doc_map.get(&src_uri).ok_or(Error {
+        let src_doc = self.document_map.get(&src_uri).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find source document".to_string(),
+            message: "Could not find source document".into(),
             data: None,
         })?;
         let position = params.text_document_position_params.position;
@@ -459,13 +524,13 @@ impl LanguageServer for Backend {
 
         let ident = src_doc.get_ident_at_point(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find ident".to_string(),
+            message: "Could not find ident".into(),
             data: None,
         })?;
 
         debug!("goto definition for ident «{}»", ident);
 
-        for doc in doc_map.values() {
+        for doc in self.document_map.iter() {
             let result = doc.get_definition_by_name(&ident);
             if result.is_none() {
                 continue;
@@ -496,10 +561,9 @@ impl LanguageServer for Backend {
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let src_uri = params.text_document_position.text_document.uri;
-        let doc_map = self.document_map.read().await;
-        let doc = doc_map.get(&src_uri).ok_or(Error {
+        let doc = self.document_map.get(&src_uri).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find source document".to_string(),
+            message: "Could not find source document".into(),
             data: None,
         })?;
         let position = params.text_document_position.position;
@@ -510,12 +574,13 @@ impl LanguageServer for Backend {
 
         let ident = doc.get_ident_at_point(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-            message: "Could not find ident".to_string(),
+            message: "Could not find ident".into(),
             data: None,
         })?;
 
-        let refs = doc_map
-            .values()
+        let refs = self
+            .document_map
+            .iter()
             .flat_map(|doc| doc.get_references_for_ident(ident.as_str()))
             .map(|reference| reference.uri)
             .collect::<Vec<_>>();
@@ -530,9 +595,11 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
-        let doc_map = self.document_map.read().await;
-        let doc = doc_map.get(&uri).unwrap();
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
+        let doc = self.document_map.get(&uri).unwrap();
+        debug!("got doc for autocomplete");
         let completions = doc.autocomplete_for_pos(position, scope);
         Ok(completions.map(CompletionResponse::Array))
     }
@@ -575,9 +642,10 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
-        let scope = self.get_all_definitions_across_all_documents(&uri).await;
-        let doc_map = self.document_map.read().await;
-        let doc = doc_map.get(&uri).unwrap();
+        let scope = self
+            .get_all_definitions_across_all_documents(Some(&uri))
+            .await;
+        let doc = self.document_map.get(&uri).unwrap();
         let pos = params.text_document_position_params.position;
         let point = Point {
             row: pos.line as usize,
@@ -623,8 +691,7 @@ impl LanguageServer for Backend {
         debug!("semantic_tokens_full()");
         let start = std::time::Instant::now();
         let uri = params.text_document.uri;
-        let doc_map = self.document_map.read().await;
-        let Some(doc) = doc_map.get(&uri) else {
+        let Some(doc) = self.document_map.get(&uri) else {
             error!("Could not find document");
             return Err(Error::internal_error());
         };
@@ -648,8 +715,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
         debug!("document_symbol({})", uri);
-        let cache = self.cache.read().await;
-        let Some(cache_entry) = cache.get(&uri) else {
+        let Some(cache_entry) = self.cache.get(&uri) else {
             error!("Document not found in cache: {}", uri);
             return Ok(None);
         };
@@ -679,49 +745,32 @@ impl LanguageServer for Backend {
                 .collect(),
         )))
     }
-
-    async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
-        self.client
-            .log_message(MessageType::INFO, "configuration changed!")
-            .await;
-    }
-
-    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
-        self.client
-            .log_message(MessageType::INFO, "workspace folders changed!")
-            .await;
-    }
-
-    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
-        self.client
-            .log_message(MessageType::INFO, "watched files have changed!")
-            .await;
-    }
-
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        self.client
-            .log_message(MessageType::INFO, "command executed!")
-            .await;
-
-        match self.client.apply_edit(WorkspaceEdit::default()).await {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
-            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
-        }
-
-        Ok(None)
-    }
 }
 
-async fn read_config(root_path: &Path) -> Option<Config> {
+pub async fn read_config(root_path: &Path) -> Result<Config> {
     let config_path_buf = root_path.join(PathBuf::from(".varnishls.toml"));
     let config_path = config_path_buf.as_path();
     if !config_path.exists() {
-        return None;
+        return Ok(Default::default());
     }
-    let config_str = tokio::fs::read_to_string(config_path).await;
-    let config_str = config_str.ok()?;
-    toml::from_str(&config_str).ok()
+    let config_str = tokio::fs::read_to_string(config_path)
+        .await
+        .map_err(|err| Error {
+            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+            message: err.to_string().into(),
+            data: None,
+        })?;
+    let mut config: Config = toml::from_str(&config_str).map_err(|err| Error {
+        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        message: err.to_string().into(),
+        data: None,
+    })?;
+    config.vcl_paths = config
+        .vcl_paths
+        .iter()
+        .flat_map(|vcl_path| std::fs::canonicalize(vcl_path).ok())
+        .collect();
+    Ok(config)
 }
 
 async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definitions {
@@ -817,9 +866,9 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
         if let Ok(Ok(Some(vmod))) = vmod_fut.await {
             let vmod_name = vmod.name;
             let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
-                    error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
-                    continue;
-                };
+                error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+                continue;
+            };
             let def = Definition {
                 ident_str: import.name.clone(),
                 r#type: Box::new(vmod.scope),
@@ -833,32 +882,40 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
     definitions
 }
 
-fn get_all_documents<'a>(
-    doc_map: &'a HashMap<Url, Document>,
-    cache: &mut HashMap<Url, CacheEntry>,
-    root_uri: &Url,
+fn get_all_documents(
+    doc_map: &DocumentMap,
+    cache: &DashMap<Url, CacheEntry>,
+    config: &Config,
     doc_uri: &Url,
-    nested_pos: &NestedPos,
-) -> Vec<&'a Document> {
-    let Some(main_doc) = doc_map.get(doc_uri) else {
-        debug!("Could not find document {}", doc_uri);
-        return vec![];
+) -> Vec<Url> {
+    let includes: Vec<Include> = {
+        let mut entry = cache
+            .entry(doc_uri.clone())
+            .or_insert_with(CacheEntry::default);
+
+        entry
+            .includes
+            .get_or_insert_with(|| {
+                doc_map
+                    .get(doc_uri)
+                    .map(|doc| {
+                        doc.get_includes()
+                            .into_iter()
+                            .map(|include| include.resolve(&config.vcl_paths))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .to_vec()
     };
 
-    let mut docs = vec![main_doc];
-    let cache_entry = cache
-        .entry(doc_uri.clone())
-        .or_insert_with(CacheEntry::default);
-    let includes = cache_entry
-        .includes
-        .get_or_insert_with(|| main_doc.get_includes(root_uri, nested_pos))
-        .clone();
     let mut deep_includes = includes
         .iter()
-        .flat_map(|include| {
-            get_all_documents(doc_map, cache, root_uri, &include.uri, &include.nested_pos)
-        })
-        .collect();
+        .filter_map(|include| include.url.as_ref())
+        .flat_map(|include_url| get_all_documents(doc_map, cache, config, include_url))
+        .collect::<Vec<_>>();
+
+    let mut docs = vec![doc_uri.clone()];
     docs.append(&mut deep_includes);
     docs
 }
