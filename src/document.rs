@@ -852,19 +852,15 @@ impl Document {
                                     | "neg_expr"
                             )
                         }) {
-                            if node_to_type(&node)
-                                .or_else(|| {
-                                    let ident = get_node_text(&self.rope, &node);
-                                    let ident_parts = ident.split('.').collect::<Vec<_>>();
-                                    global_scope
-                                        .get_type_property_by_nested_idents(ident_parts.clone())
-                                        .cloned()
-                                })
+                            let ident = get_node_text(&self.rope, &node);
+                            let ident_parts = ident.split('.').collect::<Vec<_>>();
+                            if global_scope
+                                .get_type_property_by_nested_idents(ident_parts.clone())
                                 .is_none()
                             {
                                 add_error!(node: node, "Not found");
                                 continue;
-                            };
+                            }
                         }
                     }
                 }
