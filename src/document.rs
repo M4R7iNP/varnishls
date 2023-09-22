@@ -842,6 +842,30 @@ impl Document {
                                 }
                             }
                         }
+
+                        if node.parent().is_some_and(|parent_node| {
+                            matches!(
+                                parent_node.kind(),
+                                "set_stmt"
+                                    | "binary_expression"
+                                    | "parenthesized_expression"
+                                    | "neg_expr"
+                            )
+                        }) {
+                            if node_to_type(&node)
+                                .or_else(|| {
+                                    let ident = get_node_text(&self.rope, &node);
+                                    let ident_parts = ident.split('.').collect::<Vec<_>>();
+                                    global_scope
+                                        .get_type_property_by_nested_idents(ident_parts.clone())
+                                        .cloned()
+                                })
+                                .is_none()
+                            {
+                                add_error!(node: node, "Not found");
+                                continue;
+                            };
+                        }
                     }
                 }
                 "rmatch" | "nmatch" => {
