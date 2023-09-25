@@ -236,6 +236,7 @@ pub struct Func {
     pub r#return: Option<Box<Type>>,
     pub doc: Option<String>,
     pub args: Vec<FuncArg>,
+    pub restricted: Option<Vec<String>>,
 }
 
 impl Func {

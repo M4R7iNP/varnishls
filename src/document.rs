@@ -783,6 +783,40 @@ impl Document {
                                 }
                             }
                         }
+
+                        if let Some(restricted) = func.restricted.as_ref() {
+                            let toplev_decl = get_toplev_declaration_from_node(node);
+                            if toplev_decl.kind() == "sub_declaration" {
+                                if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
+                                    let sub_name = &*get_node_text(&self.rope, &ident_node);
+                                    if sub_name.starts_with("vcl_") {
+                                        let mut search = vec![sub_name];
+                                        let mapping = [
+                                            ("vcl_recv", "client"),
+                                            ("vcl_deliver", "client"),
+                                            ("vcl_backend_fetch", "backend"),
+                                            ("vcl_backend_response", "backend"),
+                                            ("vcl_init", "housekeeping"),
+                                            ("vcl_fini", "housekeeping"),
+                                        ];
+
+                                        mapping
+                                            .iter()
+                                            .filter(|(search_sub_name, _)| {
+                                                search_sub_name == &sub_name
+                                            })
+                                            .for_each(|(_, alias)| search.push(alias));
+
+                                        if !search
+                                            .iter()
+                                            .any(|search| restricted.contains(&search.to_string()))
+                                        {
+                                            add_error!(node: node, "Cannnot be called from {sub_name}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 "nested_ident" | "ident" => {

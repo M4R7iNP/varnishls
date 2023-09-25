@@ -792,6 +792,7 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
                     let vmod_name = &import.name;
                     vec![
                         vcc_path.join(format!("libvmod_{vmod_name}.vcc")),
+                        vcc_path.join(format!("vmod_{vmod_name}.vcc")),
                         vcc_path
                             .join(format!("libvmod_{vmod_name}"))
                             .join("vmod.vcc"),

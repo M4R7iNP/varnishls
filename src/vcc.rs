@@ -255,6 +255,23 @@ fn parse_func_args<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Ve
     args
 }
 
+fn check_restrict<'a>(parts: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<Vec<String>> {
+    let Some(next_part) = parts.peek() else {
+        return None;
+    };
+    if next_part.starts_with("Restrict ") {
+        Some(
+            parts.next().unwrap()["Restrict ".len()..]
+                .trim()
+                .split(char::is_whitespace)
+                .map(|str| str.to_string())
+                .collect(),
+        )
+    } else {
+        None
+    }
+}
+
 /**
  * Parse a vmod vcc file, using the varnish vmodtool.py tokenizer, and collect all functions,
  * objects and object methods.
@@ -284,8 +301,10 @@ pub fn parse_vcc(vcc_file: String) -> Type {
                 scope.name = toks.next().unwrap().to_string();
             }
             "ABI" => {}
+            "Restrict" => {}
             "Function" => {
-                let func = parse_func(&mut toks, &mut lines_iter);
+                let mut func = parse_func(&mut toks, &mut lines_iter);
+                func.restricted = check_restrict(&mut parts);
                 scope
                     .properties
                     .insert(func.name.to_owned(), Type::Func(func));
@@ -312,7 +331,8 @@ pub fn parse_vcc(vcc_file: String) -> Type {
                     }
 
                     parts.next();
-                    let func = parse_func(&mut toks, &mut lines_iter);
+                    let mut func = parse_func(&mut toks, &mut lines_iter);
+                    func.restricted = check_restrict(&mut parts);
                     obj.properties
                         .insert(func.name.to_owned(), Type::Func(func));
                 }
@@ -377,5 +397,30 @@ mod tests {
             panic!("arg 2 not enum");
         }
         assert_eq!(func.args[1].default_value, Some("OUT".into()));
+    }
+
+    #[test]
+    fn test_restricted() {
+        let Type::Obj(scope) = parse_vcc(
+            r#"
+$Function VOID my_func()
+$Restrict vcl_pipe backend housekeeping
+"#
+            .to_string(),
+        ) else {
+            unreachable!()
+        };
+        let Type::Func(func) = scope.properties.get("my_func").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(func.name, "my_func");
+        assert_eq!(
+            func.restricted,
+            Some(vec![
+                "vcl_pipe".to_string(),
+                "backend".to_string(),
+                "housekeeping".to_string()
+            ])
+        );
     }
 }
