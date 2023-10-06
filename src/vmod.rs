@@ -59,6 +59,7 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
             let r#type = match input_type {
                 "STRING" => Some(Type::String),
                 "STRING_LIST" => Some(Type::String),
+                "REGEX" => Some(Type::String),
                 "STRANDS" => Some(Type::String),
                 "BOOL" => Some(Type::Bool),
                 "INT" => Some(Type::Number),
