@@ -71,21 +71,21 @@ mod tests {
 
     #[test]
     fn valid() {
-        let re = r#"^/nyheter/i/(\w+)"#.to_string();
+        let re = r"^/nyheter/i/(\w+)".to_string();
         let result = is_regex_safe(re);
         assert_eq!(result, Ok(true));
     }
 
     #[test]
     fn invalid() {
-        let re = r#"{{{{{{{{["#.to_string();
+        let re = "{{{{{{{{[".to_string();
         let result = is_regex_safe(re);
         assert_eq!(result, Err(SafeRegexError::ParseError));
     }
 
     #[test]
     fn exponential() {
-        let re = r#"(.*)*"#.to_string();
+        let re = "(.*)*".to_string();
         let result = is_regex_safe(re);
         assert_eq!(result, Err(SafeRegexError::StarHeightError));
     }

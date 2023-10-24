@@ -92,10 +92,7 @@ impl Backend {
         let all_vmod_imports: Vec<VmodImport> = documents_from_main_in_order
             .iter()
             .flat_map(|doc_url| -> Vec<VmodImport> {
-                let mut cache_entry = self
-                    .cache
-                    .entry((*doc_url).clone())
-                    .or_insert_with(CacheEntry::default);
+                let mut cache_entry = self.cache.entry((*doc_url).clone()).or_default();
                 cache_entry
                     .vmod_imports
                     .get_or_insert_with(|| {
@@ -122,10 +119,7 @@ impl Backend {
             documents_from_main_in_order
                 .iter()
                 .flat_map(|doc_url| {
-                    let mut cache_entry = self
-                        .cache
-                        .entry((*doc_url).clone())
-                        .or_insert_with(CacheEntry::default);
+                    let mut cache_entry = self.cache.entry((*doc_url).clone()).or_default();
                     cache_entry
                         .definitions
                         .get_or_insert_with(|| {
@@ -889,9 +883,7 @@ fn get_all_documents(
     doc_uri: &Url,
 ) -> Vec<Url> {
     let includes: Vec<Include> = {
-        let mut entry = cache
-            .entry(doc_uri.clone())
-            .or_insert_with(CacheEntry::default);
+        let mut entry = cache.entry(doc_uri.clone()).or_default();
 
         entry
             .includes

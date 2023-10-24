@@ -20,43 +20,32 @@ jobs:
         include:
           - build: linux
             os: ubuntu-latest
-            toolchain: stable
-            target: x86_64-unknown-linux-musl
+            target: x86_64-unknown-linux-gnu
             binary_postfix: ""
 
           - build: windows
             os: windows-latest
-            toolchain: stable
             target: x86_64-pc-windows-msvc
             binary_postfix: ".exe"
 
           - build: macos
             os: macos-latest
-            toolchain: stable
             target: x86_64-apple-darwin
             binary_postfix: ""
 
           - build: macos-arm-64
             os: macos-latest
-            toolchain: nightly
             target: aarch64-apple-darwin
             binary_postfix: ""
 
     steps:
-      - name: install musl-tools if musl target
-        if: ${{ contains(matrix.target, 'musl') }}
-        run: sudo apt install musl-tools
-
       - uses: actions/checkout@v3
         with:
           submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: ${{ matrix.toolchain }}
           target: ${{ matrix.target }}
-          override: true
 
       - name: Download cache
         uses: actions/cache@v3
