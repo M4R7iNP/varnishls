@@ -6,13 +6,30 @@ use std::fmt;
 use std::path::PathBuf;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 
+fn default_vcl_paths() -> Vec<PathBuf> {
+    vec!["./".into()]
+}
+
+fn default_vmod_paths() -> Vec<PathBuf> {
+    vec![
+        // ubuntu, debian
+        "/usr/lib/x86_64-linux-gnu/varnish/vmods/".into(),
+        // fedora, centos
+        "/usr/lib64/varnish/vmods/".into(),
+        // freebsd
+        "/usr/local/lib/varnish/vmods".into(),
+        // arch
+        "/usr/lib/varnish/vmods".into(),
+    ]
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub main_vcl: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default = "default_vcl_paths")]
     pub vcl_paths: Vec<PathBuf>,
-    #[serde(default)]
+    #[serde(default = "default_vmod_paths")]
     pub vmod_paths: Vec<PathBuf>,
     #[serde(default)]
     pub vcc_paths: Vec<PathBuf>,
@@ -22,22 +39,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config {
-            main_vcl: None,
-            vcl_paths: vec!["./".into()],
-            vmod_paths: vec![
-                // ubuntu, debian
-                "/usr/lib/x86_64-linux-gnu/varnish/vmods/".into(),
-                // fedora, centos
-                "/usr/lib64/varnish/vmods/".into(),
-                // freebsd
-                "/usr/local/lib/varnish/vmods".into(),
-                // arch
-                "/usr/lib/varnish/vmods".into(),
-            ],
-            vcc_paths: vec![],
-            lint: Default::default(),
-        }
+        toml::from_str::<Config>("").unwrap()
     }
 }
 
@@ -142,6 +144,37 @@ impl Default for LintConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_config_defaults(config: Config) {
+        assert_eq!(
+            config.vcl_paths,
+            vec![PathBuf::from("./")],
+            "vcl_paths should default to ./"
+        );
+        assert!(
+            !config.vmod_paths.is_empty(),
+            "vmod_paths should not be empty"
+        );
+    }
+
+    #[test]
+    fn partial_config_with_defaults() {
+        let toml_str = r#"
+            main_vcl = "martin.vcl"
+            vcc_paths = ["./vcc-files"]
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        println!("{:?}", config);
+        assert_config_defaults(config);
+    }
+
+    #[test]
+    fn empty_config_with_defaults() {
+        let config = Config::default();
+        println!("{:?}", config);
+        assert_config_defaults(config);
+    }
 
     #[test]
     fn can_parse_lint_config() {
