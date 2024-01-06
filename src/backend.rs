@@ -296,10 +296,9 @@ impl LanguageServer for Backend {
             self.set_root_uri(root_uri.clone()).await;
 
             if root_uri.scheme() == "file" {
-                let mut root_uri = root_uri;
                 self.set_config(read_config(&root_uri.to_file_path().unwrap()).await?)
                     .await;
-                let mut config = self.config.read().await;
+                let config = self.config.read().await;
                 if let Some(ref main_vcl_path) = config.main_vcl {
                     if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
                     {
