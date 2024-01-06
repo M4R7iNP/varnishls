@@ -300,32 +300,6 @@ impl LanguageServer for Backend {
                 self.set_config(read_config(&root_uri.to_file_path().unwrap()).await?)
                     .await;
                 let mut config = self.config.read().await;
-
-                if let Some(ref main_vcl_path) = config.main_vcl {
-                    // add main_vcl_path's path to root_uri, and keep the filename in main_vcl_path
-                    if let Some(main_vcl_parent_path) = main_vcl_path
-                        .parent()
-                        .map(|path| path.to_string_lossy())
-                        .filter(|path| path != "")
-                    {
-                        // add main_vcl_parent_path to root_uri
-                        root_uri = root_uri.join(&main_vcl_parent_path).unwrap();
-                        // Fix workspace directory missing slash
-                        if !root_uri.path().ends_with('/') {
-                            root_uri.set_path(format!("{}/", root_uri.path()).as_str());
-                        }
-                        self.set_root_uri(root_uri.clone()).await;
-                        // replace main_vcl with filename only
-                        config = {
-                            let mut config = config.clone();
-                            config.main_vcl =
-                                Some(PathBuf::from(main_vcl_path.file_name().unwrap()));
-                            self.set_config(config).await;
-                            self.config.read().await
-                        }
-                    }
-                }
-
                 if let Some(ref main_vcl_path) = config.main_vcl {
                     if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
                     {

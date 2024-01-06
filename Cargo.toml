@@ -9,7 +9,7 @@ categories = ["development-tools"]
 description = "Varnish language server"
 
 [dependencies]
-goblin = "0.7"
+goblin = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ropey = "1.6"
@@ -22,8 +22,8 @@ tree-sitter-vtc = { path = "vendor/tree-sitter-vtc" }
 simplelog = "0.12.1"
 log = "0.4.17"
 clap = { version = "4.2.1", features = ["derive"] }
-toml = "0.7.3"
-regex-syntax = { version = "0.7", features = ["std"], default-features = false }
+toml = "0.8"
+regex-syntax = { version = "0.8", features = ["std"], default-features = false }
 ansi_term = "0.12.1"
 
 [build-dependencies]
