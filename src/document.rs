@@ -730,7 +730,7 @@ impl Document {
                         } else {
                             arg = {
                                 let Some(found_arg) = &func.args.get(arg_idx) else {
-                                    add_error!(node: arg_node, "Argument {} not found", arg_idx + 1);
+                                    add_error!(node: arg_node, "Extraneous argument");
                                     continue;
                                 };
                                 found_arg
