@@ -243,7 +243,7 @@ async fn main() -> ExitCode {
             let vmod = if path.is_some() {
                 read_vmod_lib(name, PathBuf::from(path.unwrap()))
                     .await
-                    .unwrap()
+                    .expect("Failed to parse vmod")
             } else {
                 match read_vmod_lib_by_name(name, vec![]).await.unwrap() {
                     Some(vmod) => vmod,

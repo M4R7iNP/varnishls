@@ -14,6 +14,8 @@ struct VmodDataCStruct {
     vrt_minor: u32,
     file_id: *const c_char,
     name: *const c_char,
+    #[cfg(feature = "varnish7")]
+    func_name: *const c_char, // ADDED IN VARNISH 7
     func: *const c_char,
     func_len: i32,
     proto: *const c_char,
@@ -38,7 +40,10 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
         .iter()
         .filter_map(|arg| -> Option<_> {
             let arg_arr = arg.as_array()?;
-            let input_type = arg_arr.first()?.as_str().unwrap();
+            let input_type = arg_arr
+                .first()?
+                .as_str()
+                .expect("Failed to find function argument type");
             let name = match arg_arr.get(1) {
                 Some(SerdeValue::String(str)) => Some(str.to_string()),
                 _ => None,
@@ -54,6 +59,7 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
             let r#type = match input_type {
                 "STRING" => Some(Type::String),
                 "STRING_LIST" => Some(Type::String),
+                "REGEX" => Some(Type::String),
                 "STRANDS" => Some(Type::String),
                 "BOOL" => Some(Type::Bool),
                 "INT" => Some(Type::Number),
@@ -99,7 +105,9 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
         .collect::<Vec<_>>()
 }
 
-fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn Error>> {
+fn parse_vmod_json_func(
+    serde_value_arr: &[SerdeValue],
+) -> Result<Func, Box<dyn Error + Send + Sync>> {
     let name = serde_value_arr
         .get(1)
         .ok_or("Missing VMOD func name")?
@@ -149,7 +157,9 @@ fn parse_vmod_json_func(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn 
     })
 }
 
-fn parse_vmod_json_obj(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn Error>> {
+fn parse_vmod_json_obj(
+    serde_value_arr: &[SerdeValue],
+) -> Result<Func, Box<dyn Error + Send + Sync>> {
     let name = serde_value_arr
         .get(1)
         .ok_or("Failed to get obj name")?
@@ -187,7 +197,7 @@ fn parse_vmod_json_obj(serde_value_arr: &[SerdeValue]) -> Result<Func, Box<dyn E
     Ok(func)
 }
 
-pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
+pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>> {
     let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json)?;
     let mut vmod_obj = Obj {
         read_only: true,
@@ -244,7 +254,10 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error>> {
     Ok(Type::Obj(vmod_obj))
 }
 
-pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData, Box<dyn Error>> {
+pub async fn read_vmod_lib(
+    vmod_name: String,
+    path: PathBuf,
+) -> Result<VmodData, Box<dyn Error + Send + Sync>> {
     let file = tokio::fs::read(path).await?;
     let elf = Elf::parse(&file)?;
 
@@ -272,10 +285,15 @@ pub async fn read_vmod_lib(vmod_name: String, path: PathBuf) -> Result<VmodData,
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
-    let json = unsafe { CStr::from_ptr(file[(vmd.json as usize)..].as_ptr() as *const c_char) }
-        .to_string_lossy();
+    let mut json: &str =
+        &(unsafe { CStr::from_ptr(file[(vmd.json as usize)..].as_ptr() as *const c_char) }
+            .to_string_lossy());
 
-    let vmod_json_data = parse_vmod_json(&json)?;
+    if json.starts_with("VMOD_JSON_SPEC\u{2}") {
+        json = &(json[(json.find('\u{2}').unwrap() + 1)..json.find('\u{3}').unwrap()]);
+    }
+
+    let vmod_json_data = parse_vmod_json(json)?;
     return Ok(VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
@@ -306,10 +324,7 @@ pub async fn read_vmod_lib_by_name(
     for search_path in search_paths {
         let path = search_path.join(&file_name);
         if path.exists() {
-            return match read_vmod_lib(name, path).await {
-                Ok(result) => Ok(Some(result)),
-                Err(err) => Err(err.to_string().into()),
-            };
+            return Ok(Some(read_vmod_lib(name, path).await?));
         }
     }
 
