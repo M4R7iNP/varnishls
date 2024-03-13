@@ -20,6 +20,30 @@ fn default_vmod_paths() -> Vec<PathBuf> {
         "/usr/local/lib/varnish/vmods".into(),
         // arch
         "/usr/lib/varnish/vmods".into(),
+        // macos homebrew
+        "/opt/homebrew/usr/lib/varnish/vmods".into(),
+    ]
+}
+
+fn default_vcc_paths() -> Vec<PathBuf> {
+    let default_from_env = std::env::var("VARNISHLS_VCC_PATHS")
+        .map(|env_str| {
+            env_str
+                .split(';')
+                .map(|path_str| PathBuf::from(path_str))
+                .collect::<Vec<_>>()
+        })
+        .ok();
+
+    if let Some(default_from_env) = default_from_env {
+        return default_from_env;
+    }
+
+    vec![
+        // fedora
+        "/usr/share/varnish/vcc".into(),
+        // macos homebrew
+        "/opt/homebrew/share/varnish/vcc".into(),
     ]
 }
 
@@ -31,7 +55,7 @@ pub struct Config {
     pub vcl_paths: Vec<PathBuf>,
     #[serde(default = "default_vmod_paths")]
     pub vmod_paths: Vec<PathBuf>,
-    #[serde(default)]
+    #[serde(default = "default_vcc_paths")]
     pub vcc_paths: Vec<PathBuf>,
     #[serde(default)]
     pub lint: LintConfig,
