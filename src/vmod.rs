@@ -324,7 +324,7 @@ pub async fn read_vmod_lib_by_name(
     for search_path in search_paths {
         let path = search_path.join(&file_name);
         if path.exists() {
-            return Ok(read_vmod_lib(name, path).await.map(|result| Some(result))?);
+            return Ok(Some(read_vmod_lib(name, path).await?));
         }
     }
 
