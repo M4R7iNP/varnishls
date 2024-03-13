@@ -41,7 +41,7 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
         .filter_map(|arg| -> Option<_> {
             let arg_arr = arg.as_array()?;
             let input_type = arg_arr
-                .get(0)?
+                .first()?
                 .as_str()
                 .expect("Failed to find function argument type");
             let name = match arg_arr.get(1) {
@@ -122,7 +122,7 @@ fn parse_vmod_json_func(
         .ok_or("method signature not array")?;
 
     let ret_types: Vec<String> = signature_arr
-        .get(0)
+        .first()
         .ok_or("Missing return type field")?
         .as_array()
         .ok_or("Return type should be array")?
@@ -137,7 +137,7 @@ fn parse_vmod_json_func(
         .collect();
 
     let args = parse_vmod_func_args(&signature_arr[3..]);
-    let ret_type = ret_types.get(0).ok_or("Missing return type")?.as_str();
+    let ret_type = ret_types.first().ok_or("Missing return type")?.as_str();
     let r#return: Option<Box<Type>> = match ret_type {
         "BACKEND" => Some(Box::new(Type::Backend)),
         "STRING" => Some(Box::new(Type::String)),
@@ -205,7 +205,7 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>>
     };
 
     for row in json_parsed.iter() {
-        let row_type = match row.get(0) {
+        let row_type = match row.first() {
             Some(SerdeValue::String(str)) => str.as_str(),
             _ => continue,
         };
