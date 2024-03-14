@@ -162,26 +162,21 @@ impl Backend {
         let mut includes_to_process = VecDeque::from(initial_includes);
 
         while let Some(include) = includes_to_process.pop_front() {
-            debug!("include {:?}", include.path);
             let mut include = include;
             if include.url.is_none() {
                 include = include.resolve(&config.vcl_paths);
             }
 
-            // debug!("include: {:?}", include);
             let Some(include_url) = include.url else {
                 debug!("Could not find include {:?}", include.path);
                 continue;
             };
-
-            debug!("include url {:?}", include_url);
 
             let doc_already_exists = {
                 if let Some(doc) = self.document_map.get(&include_url) {
                     // Update nested_pos if it doesn't match
                     if doc.pos_from_main_doc != include.nested_pos {
                         drop(doc);
-                        debug!("updating nested_pos");
                         let mut doc = self.document_map.get_mut(&include_url).unwrap();
                         doc.pos_from_main_doc = include.nested_pos.clone();
                         // ... do the same for nested includes
@@ -292,7 +287,6 @@ unsafe impl Sync for Backend {}
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
         let root_uri = init_params.root_uri;
-        debug!("received root_uri from lsp: {:?}", root_uri);
         // TODO: consider not initializing if uri scheme is not file
 
         if let Some(mut root_uri) = root_uri {
@@ -446,12 +440,10 @@ impl LanguageServer for Backend {
             .map(|change| (change.range, change.text));
 
         {
-            debug!("updating doc");
             let mut doc = self.document_map.get_mut(&uri).unwrap();
             doc.edit(version, changes);
         }
 
-        debug!("clearing cache");
         self.cache.remove(&uri);
 
         let config = self.config.read().await;
