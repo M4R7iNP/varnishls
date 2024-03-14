@@ -29,6 +29,7 @@ pub struct Backend {
     pub client: Option<Client>,
     pub document_map: DocumentMap,
     pub root_uri: RwLock<Url>,
+    pub root_document_uri: RwLock<Option<Url>>,
     pub config: RwLock<Config>,
     /// cache to cache e.g. stat-ing includes and discovering definitions in all documents
     pub cache: DashMap<Url, CacheEntry>,
@@ -42,6 +43,7 @@ impl Backend {
             root_uri: RwLock::new(
                 Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
             ),
+            root_document_uri: Default::default(),
             config: Default::default(),
             cache: Default::default(),
         }
@@ -61,15 +63,14 @@ impl Backend {
         debug!("get_all_definitions_across_all_documents()");
         let start = std::time::Instant::now();
         let config = self.config.read().await;
-        let root_uri = self.root_uri.read().await;
         let mut definitions = get_varnish_builtins();
 
         let documents_from_main_in_order = {
             let mut docs = vec![];
 
-            if let Some(ref main_vcl_path) = config.main_vcl {
-                let main_vcl_uri = root_uri.join(&main_vcl_path.to_string_lossy()).unwrap();
-                docs = get_all_documents(&self.document_map, &self.cache, &config, &main_vcl_uri);
+            if let Some(ref root_document_uri) = *self.root_document_uri.read().await {
+                docs =
+                    get_all_documents(&self.document_map, &self.cache, &config, &root_document_uri);
             } else if let Some(src_doc_url) = src_doc_url {
                 docs = get_all_documents(&self.document_map, &self.cache, &config, src_doc_url);
             }
@@ -274,6 +275,7 @@ impl Default for Backend {
             root_uri: RwLock::new(
                 Url::from_directory_path(std::env::current_dir().unwrap()).unwrap(),
             ),
+            root_document_uri: Default::default(),
             config: Default::default(),
             cache: Default::default(),
         }
@@ -302,6 +304,8 @@ impl LanguageServer for Backend {
                 if let Some(ref main_vcl_path) = config.main_vcl {
                     if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
                     {
+                        *self.root_document_uri.write().await = Some(main_vcl_url.clone());
+
                         let includes = {
                             let main_doc = self.document_map.get(&main_vcl_url).unwrap();
                             main_doc.get_includes()
