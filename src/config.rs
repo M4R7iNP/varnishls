@@ -54,6 +54,8 @@ pub struct Config {
     pub vcc_paths: Vec<PathBuf>,
     #[serde(default)]
     pub lint: LintConfig,
+    #[serde(default)]
+    pub formatter: FormatterConfig,
 }
 
 impl Default for Config {
@@ -157,6 +159,50 @@ impl Default for LintConfig {
             prefer_lowercase_headers: LintLevel::Hint,
             prefer_custom_headers_without_prefix: LintLevel::Disabled,
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct FormatterConfig {
+    #[serde(default)]
+    pub indent_size: IndentSize,
+    #[serde(default)]
+    pub format_large_ifs_style: FormatIfStyle,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum IndentSize {
+    Number(u8),
+    // TODO: FIXME:
+    Tab,
+}
+
+impl Default for IndentSize {
+    fn default() -> Self {
+        return IndentSize::Number(4);
+    }
+}
+
+impl ToString for IndentSize {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Number(n) => " ".repeat(*n as usize),
+            Self::Tab => "\t".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FormatIfStyle {
+    Tight,
+    Loose,
+}
+
+impl Default for FormatIfStyle {
+    fn default() -> Self {
+        return Self::Loose; // Default in C code style guides
     }
 }
 

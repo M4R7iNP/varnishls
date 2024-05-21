@@ -376,6 +376,7 @@ impl LanguageServer for Backend {
                 rename_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -711,6 +712,34 @@ impl LanguageServer for Backend {
                 })
                 .collect(),
         )))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let Some(doc) = self.document_map.get(&uri) else {
+            error!("Could not find document");
+            return Err(Error::internal_error());
+        };
+        let doc_len_lines = doc.rope.len_lines();
+        let doc_last_line_len = doc.rope.line(doc_len_lines - 1).len_utf16_cu();
+        let src = doc.rope.to_string();
+        let config = self.config.read().await;
+        let result = crate::formatter::format(src, &config.formatter);
+        return Ok(Some(vec![
+            TextEdit {
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: doc_len_lines as u32,
+                        character: doc_last_line_len as u32,
+                    }
+                },
+                new_text: result,
+            }
+        ]));
     }
 }
 

@@ -50,7 +50,7 @@ module.exports = grammar({
       seq(
         'sub',
         field('ident', $.ident),
-        field('body', seq('{', repeat($.stmt), '}')),
+        field('body', $.block),
       ),
     backend_declaration: $ =>
       seq(
@@ -126,6 +126,7 @@ module.exports = grammar({
     inline_probe: $ => seq('{', repeat($.backend_property), '}'),
 
     stmt: $ => choice($.if_stmt, $._statements_with_semicolon),
+    block: $ => seq('{', repeat($.stmt), '}'),
 
     /*
      * hack to make statements with semicolon (pretty much everything but
@@ -150,7 +151,7 @@ module.exports = grammar({
       seq(
         'if',
         field('condition', $.parenthesized_expression),
-        field('consequence', seq('{', repeat($.stmt), '}')),
+        field('consequence', $.block),
         repeat($.elsif_stmt),
         optional($.else_stmt),
       ),
@@ -159,9 +160,9 @@ module.exports = grammar({
       seq(
         field('keyword', $.elsif_keyword),
         field('condition', $.parenthesized_expression),
-        field('consequence', seq('{', repeat($.stmt), '}')),
+        field('consequence', $.block),
       ),
-    else_stmt: $ => seq('else', '{', repeat($.stmt), '}'),
+    else_stmt: $ => seq('else', $.block),
     call_stmt: $ => seq('call', field('ident', $.ident)), // subroutine call expr (e.g. «call strip_query_params;»)
     ident_call_expr: $ =>
       prec(
@@ -327,7 +328,7 @@ module.exports = grammar({
       ),
 
     inline_c: _$ =>
-      seq('C{', repeat1(choice(/[^{}]+/, seq('{', /[^\}]+/, '}'))), '}C'),
+      seq('C{', token(repeat1(choice(/[^{}]+/, seq('{', /[^\}]+/, '}')))), '}C'),
 
     _word: () => /[\w-]+/,
   },
