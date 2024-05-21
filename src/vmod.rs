@@ -283,6 +283,8 @@ pub async fn read_vmod_lib(
     // Offset in binary for symbol value
     let offset = sec.sh_offset as usize + vmd_sym.st_value as usize - sec.sh_addr as usize;
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
+    // let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
+    #[allow(invalid_reference_casting)]
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
     let mut json: &str =

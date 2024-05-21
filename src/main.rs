@@ -1,7 +1,7 @@
 use ansi_term::Colour;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use log::debug;
-use simplelog::{Config, LevelFilter, WriteLogger};
+use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tokio::fs;
@@ -10,6 +10,7 @@ use tower_lsp::{LspService, Server};
 
 use varnishls::backend::{read_config, Backend};
 use varnishls::document::Include;
+use varnishls::formatter;
 use varnishls::vmod::{read_vmod_lib, read_vmod_lib_by_name};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -67,6 +68,11 @@ enum Command {
         /// Files to lint
         path: PathBuf,
     },
+
+    Format {
+        /// Files to lint
+        paths: Vec<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -83,7 +89,9 @@ async fn main() -> ExitCode {
             if debug {
                 let _ = WriteLogger::init(
                     LevelFilter::Debug,
-                    Config::default(),
+                    ConfigBuilder::new()
+                        .add_filter_allow_str("varnishls")
+                        .build(),
                     std::fs::File::create("varnishls.log").unwrap(),
                 );
             }
@@ -125,7 +133,9 @@ async fn main() -> ExitCode {
             if debug {
                 let _ = WriteLogger::init(
                     LevelFilter::Debug,
-                    Config::default(),
+                    ConfigBuilder::new()
+                        .add_filter_allow_str("varnishls")
+                        .build(),
                     std::fs::File::create("varnishls.log").unwrap(),
                 );
             }
@@ -264,6 +274,18 @@ async fn main() -> ExitCode {
 
             let scope = varnishls::vcc::parse_vcc(src);
             println!("scope: {:?}", scope);
+        }
+        Command::Format { paths } => {
+            let exit_code = ExitCode::SUCCESS;
+            for path in paths {
+                let src = fs::read_to_string(&path)
+                    .await
+                    .expect("Could not read VCL file");
+                let formatted = formatter::format(src, &Default::default());
+                print!("{formatted}");
+            }
+
+            return exit_code;
         }
     }
 
