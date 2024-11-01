@@ -257,9 +257,7 @@ fn parse_func_args<'a>(toks: &mut Peekable<impl Iterator<Item = &'a str>>) -> Ve
 }
 
 fn check_restrict<'a>(parts: &mut Peekable<impl Iterator<Item = &'a str>>) -> Option<Vec<String>> {
-    let Some(next_part) = parts.peek() else {
-        return None;
-    };
+    let next_part = parts.peek()?;
     if next_part.starts_with("Restrict ") {
         Some(
             parts.next().unwrap()["Restrict ".len()..]

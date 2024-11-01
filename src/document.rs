@@ -1725,9 +1725,7 @@ fn get_toplev_declaration_from_node(node: Node) -> Node {
 fn find_parent(node: Node, kind: String) -> Option<Node> {
     let mut node = node;
     loop {
-        let Some(parent_node) = node.parent() else {
-            return None;
-        };
+        let parent_node = node.parent()?;
         node = parent_node;
         if node.kind() == kind {
             return Some(node);
