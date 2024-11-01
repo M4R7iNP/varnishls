@@ -32,6 +32,7 @@
   "deliver"
   "abandon"
   "lookup"
+  "ok"
 ] @keyword
 
 (operator) @operator
