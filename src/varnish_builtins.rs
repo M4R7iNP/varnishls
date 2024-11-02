@@ -99,7 +99,7 @@ pub struct AutocompleteSearchOptions {
 
 impl Definitions {
     pub fn get(&self, ident: &str) -> Option<&Definition> {
-        self.properties.get(&ident.to_string())
+        self.properties.get(ident)
     }
 
     pub fn get_type_property_by_nested_idents(&self, idents: Vec<&str>) -> Option<&Type> {
@@ -162,9 +162,7 @@ impl HasTypeProperties for Definitions {
             .collect()
     }
     fn get_type_property(&self, ident: &str) -> Option<&Type> {
-        self.properties
-            .get(&ident.to_string())
-            .map(|def| &(*def.r#type))
+        self.properties.get(ident).map(|def| &(*def.r#type))
     }
     fn obj(&self) -> Option<&Obj> {
         None
@@ -213,7 +211,7 @@ impl HasTypeProperties for Obj {
         if self.is_http_headers {
             return Some(&Type::String);
         }
-        self.properties.get(&ident.to_string())
+        self.properties.get(ident)
     }
     fn obj(&self) -> Option<&Obj> {
         Some(self)
