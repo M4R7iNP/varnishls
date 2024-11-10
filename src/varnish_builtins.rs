@@ -29,6 +29,7 @@ pub enum Type {
     Enum(Vec<String>),
     Blob,
     IP,
+    Body,
 }
 
 impl Type {
@@ -74,6 +75,7 @@ impl std::fmt::Display for Type {
             Type::Enum(values) => write!(f, "ENUM {{{}}}", values.join(", ")),
             Type::Blob => write!(f, "BLOB"),
             Type::IP => write!(f, "IP"),
+            Type::Body => write!(f, "BODY"),
         }
     }
 }
@@ -424,6 +426,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("backend".to_string(), Type::Backend),
             ("uncacheable".to_string(), Type::Bool),
             ("is_bgfetch".to_string(), Type::Bool),
+            ("body".to_string(), Type::Body),
         ]),
         ..Obj::default()
     });
@@ -450,6 +453,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("reason".to_string(), Type::String),
             ("backend".to_string(), Type::Backend),
             ("is_streaming".to_string(), Type::Bool),
+            ("body".to_string(), Type::Body),
         ]),
         ..Obj::default()
     });
@@ -476,6 +480,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("backend.ip".to_string(), Type::String),
             ("backend.name".to_string(), Type::String),
             ("backend".to_string(), Type::Backend),
+            ("body".to_string(), Type::Body),
             ("do_esi".to_string(), Type::Bool),
             ("do_gunzip".to_string(), Type::Bool),
             ("do_gzip".to_string(), Type::Bool),
