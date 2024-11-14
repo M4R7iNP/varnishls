@@ -79,19 +79,20 @@ const RESERVED_KEYWORDS: &[&str] = &[
     // "req", "resp", "bereq", "beresp", "client", "server", // FIXME: actually valid identifier
 ];
 
+// Sorted most to least important works in vscode
 pub const LEGEND_TYPES: &[SemanticTokenType] = &[
-    SemanticTokenType::VARIABLE,
-    SemanticTokenType::PROPERTY,
-    SemanticTokenType::FUNCTION,
-    SemanticTokenType::KEYWORD,
-    SemanticTokenType::STRING,
-    SemanticTokenType::COMMENT,
-    SemanticTokenType::NUMBER,
-    SemanticTokenType::OPERATOR,
-    SemanticTokenType::PARAMETER,
-    SemanticTokenType::REGEXP,
-    SemanticTokenType::NUMBER,
     // SemanticTokenType::new("delimiter"),
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::REGEXP,
+    SemanticTokenType::PARAMETER,
+    SemanticTokenType::OPERATOR,
+    SemanticTokenType::NUMBER,
+    SemanticTokenType::COMMENT,
+    SemanticTokenType::STRING,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::PROPERTY,
+    SemanticTokenType::VARIABLE,
 ];
 
 pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DEFAULT_LIBRARY];
