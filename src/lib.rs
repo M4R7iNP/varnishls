@@ -1,10 +1,10 @@
 pub mod backend;
 pub mod config;
 pub mod document;
+pub mod formatter;
 pub mod parser;
 pub mod safe_regex;
 pub mod static_autocomplete_items;
 pub mod varnish_builtins;
 pub mod vcc;
 pub mod vmod;
-pub mod formatter;

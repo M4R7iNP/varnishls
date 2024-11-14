@@ -26,6 +26,7 @@
     "call"
     "include"
     "backend"
+    "probe"
     "acl"
     ","
 ] @append_space
@@ -40,6 +41,8 @@
     [
         (toplev_declaration)
         (stmt)
+        (backend_property)
+        (acl_entry)
     ] @append_hardline
     .
     (COMMENT)* @do_nothing
@@ -74,9 +77,9 @@
 (inline_c) @append_hardline @multi_line_indent_all @allow_blank_line_before
 ";" @append_space
 
-(backend_property) @append_hardline
-; FIXME:
-((backend_property ";"? @do_nothing) @append_delimiter (#delimiter! ";"))
+(string_list (string) @prepend_hardline)
+(string_list . (string) @prepend_indent_start)
+(string_list (string) @append_indent_end .)
 
 [
     (string)

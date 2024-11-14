@@ -5,6 +5,7 @@ use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tower_lsp::{LspService, Server};
 
@@ -70,6 +71,9 @@ enum Command {
     },
 
     Format {
+        /// Write
+        #[clap(short, long)]
+        write: bool,
         /// Files to lint
         paths: Vec<PathBuf>,
     },
@@ -275,15 +279,35 @@ async fn main() -> ExitCode {
             let scope = varnishls::vcc::parse_vcc(src);
             println!("scope: {:?}", scope);
         }
-        Command::Format { paths } => {
+        Command::Format { write, paths } => {
             let exit_code = ExitCode::SUCCESS;
+            let cwd = std::env::current_dir().unwrap();
+            let config = read_config(&cwd).await.unwrap_or_default();
+            let now = std::time::Instant::now();
             for path in paths {
-                let src = fs::read_to_string(&path)
+                let mut file = fs::File::options()
+                    .read(true)
+                    .write(write)
+                    .open(&path)
                     .await
-                    .expect("Could not read VCL file");
-                let formatted = formatter::format(src, &Default::default());
-                print!("{formatted}");
+                    .expect("Could not open VCL file");
+                let mut src: String = "".into();
+                file.read_to_string(&mut src).await.unwrap();
+                let Ok(formatted) = formatter::format(src, &config.formatter).inspect_err(|err| {
+                    log::error!("Failed to format {}: {err}", &path.to_string_lossy());
+                }) else {
+                    continue;
+                };
+
+                if write {
+                    file.rewind().await.unwrap();
+                    file.set_len(0).await.unwrap();
+                    file.write_all(formatted.as_bytes()).await.expect("rip");
+                }
+                // println!("{formatted}");
             }
+
+            println!("Took: {}ms", now.elapsed().as_millis());
 
             return exit_code;
         }

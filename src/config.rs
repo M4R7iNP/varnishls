@@ -162,15 +162,17 @@ impl Default for LintConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default, Copy)]
 pub struct FormatterConfig {
     #[serde(default)]
     pub indent_size: IndentSize,
     #[serde(default)]
     pub format_large_ifs_style: FormatIfStyle,
+    #[serde(default)]
+    pub fix_else_ifs: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 #[serde(untagged)]
 pub enum IndentSize {
     Number(u8),
@@ -180,10 +182,11 @@ pub enum IndentSize {
 
 impl Default for IndentSize {
     fn default() -> Self {
-        return IndentSize::Number(4);
+        IndentSize::Number(4)
     }
 }
 
+#[allow(clippy::to_string_trait_impl)]
 impl ToString for IndentSize {
     fn to_string(&self) -> String {
         match self {
@@ -193,7 +196,7 @@ impl ToString for IndentSize {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum FormatIfStyle {
     Tight,
@@ -202,7 +205,7 @@ pub enum FormatIfStyle {
 
 impl Default for FormatIfStyle {
     fn default() -> Self {
-        return Self::Loose; // Default in C code style guides
+        Self::Loose // Default in C code style guides
     }
 }
 

@@ -23,6 +23,25 @@ struct VmodDataCStruct {
     abi: *const c_char,
 }
 
+/*
+#[repr(C)]
+#[derive(Debug)]
+struct VmodDataCStructVarnish7 {
+    vrt_major: u32,
+    vrt_minor: u32,
+    file_id: *const c_char,
+    name: *const c_char,
+    func_name: *const c_char, // ADDED IN VARNISH 7
+    func: *const c_char,
+    func_len: i32,
+    proto: *const c_char,
+    json: *const c_char,
+    abi: *const c_char,
+}
+*/
+
+// enum VmodDataCStructEnum = VmodDataCStruct | VmodDataCStructVarnish7;
+
 #[derive(Debug)]
 pub struct VmodData {
     pub vrt_major: usize,
@@ -283,7 +302,6 @@ pub async fn read_vmod_lib(
     // Offset in binary for symbol value
     let offset = sec.sh_offset as usize + vmd_sym.st_value as usize - sec.sh_addr as usize;
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
-    // let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
     #[allow(invalid_reference_casting)]
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
@@ -296,7 +314,7 @@ pub async fn read_vmod_lib(
     }
 
     let vmod_json_data = parse_vmod_json(json)?;
-    return Ok(VmodData {
+    let data = VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
         name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
@@ -315,7 +333,9 @@ pub async fn read_vmod_lib(
             .to_string(),
         json: json.to_string(),
         scope: vmod_json_data,
-    });
+    };
+    drop(file);
+    Ok(data)
 }
 
 pub async fn read_vmod_lib_by_name(

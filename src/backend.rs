@@ -179,7 +179,7 @@ impl Backend {
                     if doc.pos_from_main_doc != include.nested_pos {
                         drop(doc);
                         let mut doc = self.document_map.get_mut(&include_url).unwrap();
-                        doc.pos_from_main_doc = include.nested_pos.clone();
+                        doc.pos_from_main_doc.clone_from(&include.nested_pos);
                         // ... do the same for nested includes
                         includes_to_process.append(&mut doc.get_includes().into());
                         drop(doc);
@@ -288,6 +288,7 @@ unsafe impl Sync for Backend {}
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
         let root_uri = init_params.root_uri;
+        debug!("initial root_uri: {root_uri:?}");
         // TODO: consider not initializing if uri scheme is not file
 
         if let Some(mut root_uri) = root_uri {
@@ -301,6 +302,7 @@ impl LanguageServer for Backend {
                     .await;
                 let config = self.config.read().await;
                 if let Some(ref main_vcl_path) = config.main_vcl {
+                    debug!("main_vcl_path: {main_vcl_path:?}");
                     if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
                     {
                         *self.root_document_uri.write().await = Some(main_vcl_url.clone());
@@ -545,7 +547,7 @@ impl LanguageServer for Backend {
             column: position.character as usize,
         };
 
-        let ident = doc.get_ident_at_point(point).ok_or(Error {
+        let ident = doc.get_ident_at_point_full(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
             message: "Could not find ident".into(),
             data: None,
@@ -768,9 +770,8 @@ impl LanguageServer for Backend {
         let doc_last_line_len = doc.rope.line(doc_len_lines - 1).len_utf16_cu();
         let src = doc.rope.to_string();
         let config = self.config.read().await;
-        let result = crate::formatter::format(src, &config.formatter);
-        return Ok(Some(vec![
-            TextEdit {
+        match crate::formatter::format(src, &config.formatter) {
+            Ok(result) => Ok(Some(vec![TextEdit {
                 range: Range {
                     start: Position {
                         line: 0,
@@ -779,11 +780,15 @@ impl LanguageServer for Backend {
                     end: Position {
                         line: doc_len_lines as u32,
                         character: doc_last_line_len as u32,
-                    }
+                    },
                 },
                 new_text: result,
+            }])),
+            Err(err) => {
+                error!("Failed to format: {err}");
+                Err(Error::internal_error())
             }
-        ]));
+        }
     }
 }
 

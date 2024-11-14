@@ -33,6 +33,76 @@ pub enum Type {
     Bytes,
 }
 
+#[derive(Debug)]
+struct Variable {
+    r#type: Type,
+    name: String,
+    properties: Option<Vec<Property>>,
+    definition: Definition,
+}
+
+impl HasTypeProperties for Variable {
+    fn get_type_properties_by_range(&self, partial_ident: &str) -> Vec<(&String, &Type)> {
+        let Some(ref properties) = self.properties else {
+            return vec![];
+        };
+
+        properties
+            .iter()
+            .filter(|prop| prop.name.starts_with(partial_ident))
+            .map(|prop| (&prop.name, &prop.r#type))
+            .collect()
+    }
+    fn get_type_property(&self, ident: &str) -> Option<&Type> {
+        let Some(ref properties) = self.properties else {
+            return None;
+        };
+
+        properties
+            .iter()
+            .find(|prop| prop.name == ident)
+            .map(|prop| &prop.r#type)
+    }
+    fn obj(&self) -> Option<&Obj> {
+        None
+    }
+}
+
+#[derive(Debug)]
+struct Property {
+    r#type: Type,
+    name: String,
+    properties: Option<Vec<Variable>>,
+    read_only: bool,
+}
+
+impl HasTypeProperties for Property {
+    fn get_type_properties_by_range(&self, partial_ident: &str) -> Vec<(&String, &Type)> {
+        let Some(ref properties) = self.properties else {
+            return vec![];
+        };
+
+        properties
+            .iter()
+            .filter(|prop| prop.name.starts_with(partial_ident))
+            .map(|prop| (&prop.name, &prop.r#type))
+            .collect()
+    }
+    fn get_type_property(&self, ident: &str) -> Option<&Type> {
+        let Some(ref properties) = self.properties else {
+            return None;
+        };
+
+        properties
+            .iter()
+            .find(|prop| prop.name == ident)
+            .map(|prop| &prop.r#type)
+    }
+    fn obj(&self) -> Option<&Obj> {
+        None
+    }
+}
+
 impl Type {
     pub fn is_same_type_as(&self, other: &Self) -> bool {
         discriminant(self) == discriminant(other)
@@ -301,18 +371,6 @@ const DEFAULT_RESPONSE_HEADERS: &[&str] = &[
     "set-cookie",
 ];
 
-// https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_backend.c#L121-L130
-pub const PROBE_FIELDS: &[&str] = &[
-    "url",
-    "request",
-    "expected_response",
-    "timeout",
-    "interval",
-    "window",
-    "threshold",
-    "initial",
-];
-
 pub fn get_probe_field_types<'a>() -> HashMap<&'a str, Type> {
     HashMap::from([
         ("url", Type::String),
@@ -360,11 +418,12 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("via", Type::Backend),
         ("preamble", Type::Blob),
         ("authority", Type::String),
-        // Varnish Plus Backend SSL/TLS fields
+        // Varnish Enterprise (https://docs.varnish-software.com/varnish-enterprise/features/backend-ssl/)
         ("ssl", Type::Number),
         ("ssl_sni", Type::Number),
         ("ssl_verify_peer", Type::Number),
         ("ssl_verify_host", Type::Number),
+        ("certificate", Type::String),
     ])
 }
 
@@ -495,6 +554,8 @@ pub fn get_varnish_builtins() -> Definitions {
             ("backend".to_string(), Type::Backend),
             ("is_streaming".to_string(), Type::Bool),
             ("body".to_string(), Type::Body),
+            // Varnish Enterprise (https://docs.varnish-software.com/varnish-enterprise/features/timeouts/)
+            ("send_timeout".to_string(), Type::Duration),
         ]),
         ..Obj::default()
     });

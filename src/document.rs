@@ -303,6 +303,16 @@ impl Document {
         Some(name)
     }
 
+    /// get identifier at point
+    pub fn get_ident_at_point_full(&self, point: Point) -> Option<String> {
+        let node = self
+            .ast
+            .root_node()
+            .descendant_for_point_range(point, point)?;
+        let name = get_node_text(&self.rope, &node);
+        Some(name)
+    }
+
     pub fn get_definition_by_name(&self, name: &str) -> Option<(Point, Point)> {
         let name_escaped = name.replace('"', "\\\"");
         let q = Query::new(
@@ -988,6 +998,29 @@ impl Document {
                         varnishls_ignore = Some(VarnishlsIgnore {
                             line: node.end_position().row + 1,
                         });
+                    }
+                }
+                "vtc_statement" | "vtc_block_statement" => {
+                    let start_line_idx = node.start_position().row;
+                    let end_line_idx = node.end_position().row;
+                    if start_line_idx != end_line_idx {
+                        // make sure newlines are escaped (except in blocks)
+                        let text = self.rope.byte_slice(node.byte_range()).to_string();
+                        let chars = text.chars();
+                        let mut block_depth = 0;
+                        let mut prev_char = '\0';
+                        for (idx, char) in chars.enumerate() {
+                            if char == '{' {
+                                block_depth += 1;
+                            }
+                            if char == '}' {
+                                block_depth -= 1;
+                            }
+                            if block_depth == 0 && idx > 0 && char == '\n' && prev_char != '\\' {
+                                add_error!("Unescaped newline");
+                            }
+                            prev_char = char;
+                        }
                     }
                 }
                 _ => {}

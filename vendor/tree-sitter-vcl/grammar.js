@@ -47,11 +47,7 @@ module.exports = grammar({
         field('body', seq('{', repeat($.acl_entry), '}')),
       ),
     sub_declaration: $ =>
-      seq(
-        'sub',
-        field('ident', $.ident),
-        field('body', $.block),
-      ),
+      seq('sub', field('ident', $.ident), field('body', $.block)),
     backend_declaration: $ =>
       seq(
         'backend',
@@ -182,8 +178,8 @@ module.exports = grammar({
         'new',
         optional(
           seq(
-            field('ident', $.ident),
             optional(seq('=', optional(field('def_right', $.ident_call_expr)))),
+            field('ident', $.ident),
           ),
         ),
       ),
@@ -330,7 +326,11 @@ module.exports = grammar({
       ),
 
     inline_c: _$ =>
-      seq('C{', token(repeat1(choice(/[^{}]+/, seq('{', /[^\}]+/, '}')))), '}C'),
+      seq(
+        'C{',
+        token(repeat1(choice(/[^{}]+/, seq('{', /[^\}]+/, '}')))),
+        '}C',
+      ),
 
     _word: () => /[\w-]+/,
   },

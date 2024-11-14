@@ -1,0 +1,18 @@
+---
+source: src/formatter.rs
+expression: "format(input, &config)"
+input_file: src/formatter_tests/006_fix_else_if.vcl
+---
+sub vcl_recv {
+    if (req.url ~ "/a/") {
+        call a;
+    } else if (req.url ~ "/b/") {
+        call b;
+    } else if (req.url ~ "/c/") {
+        call c;
+    } else if (req.url ~ "/d/") {
+        call d;
+    } else {
+        call e;
+    }
+}

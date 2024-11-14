@@ -60,9 +60,9 @@
 (bool) @constant.builtin
 
 (ident_call_expr
-  ident: (nested_ident) @function.call)
+  ident: [(nested_ident) (ident)] @function.call)
 (ident_call_expr
-  ident: (nested_ident) @function.builtin (#any-of? @function.builtin "regsub" "regsuball" "hash_data" "synthetic" "ban"))
+  ident: [(nested_ident) (ident)] @function.builtin (#any-of? @function.builtin "regsub" "regsuball" "hash_data" "synthetic" "ban"))
 
 (ident) @variable
 (nested_ident) @variable
