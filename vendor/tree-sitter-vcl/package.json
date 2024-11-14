@@ -6,8 +6,9 @@
   "types": "bindings/node",
   "scripts": {
     "build": "tree-sitter generate",
-    "install": "node-gyp-build",
-    "prebuildify": "prebuildify --napi --strip"
+    "postbuild": "node-gyp-build",
+    "prebuildify": "prebuildify --napi --strip",
+    "install": "node-gyp-build"
   },
   "keywords": [],
   "files": [
