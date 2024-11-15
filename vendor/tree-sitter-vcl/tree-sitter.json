@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "vcl",
+      "camelcase": "Vcl",
+      "scope": "source.vcl",
+      "path": ".",
+      "file-types": ["vcl"]
+    }
+  ],
+  "metadata": {
+    "version": "1.0.0",
+    "license": "ISC",
+    "description": "",
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-vcl"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false
+  }
+}

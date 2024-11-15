@@ -2,23 +2,15 @@
   "name": "tree-sitter-vtc",
   "version": "1.0.0",
   "description": "",
-  "main": "bindings/node",
+  "main": "",
   "scripts": {
     "build": "tree-sitter generate"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "LGPL",
   "devDependencies": {
     "nan": "^2.22.0",
-    "tree-sitter-cli": "^0.22.6"
-  },
-  "tree-sitter": [
-    {
-      "scope": "source.vtc",
-      "file-types": [
-        "vtc"
-      ]
-    }
-  ]
+    "tree-sitter-cli": "^0.24.4"
+  }
 }

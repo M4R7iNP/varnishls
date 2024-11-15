@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "vtc",
+      "camelcase": "Vtc",
+      "scope": "source.vtc",
+      "path": ".",
+      "file-types": ["vtc"]
+    }
+  ],
+  "metadata": {
+    "version": "1.0.0",
+    "license": "ISC",
+    "description": "",
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-vtc"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false
+  }
+}

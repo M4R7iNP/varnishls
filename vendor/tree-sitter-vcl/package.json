@@ -2,44 +2,15 @@
   "name": "tree-sitter-vcl",
   "version": "1.0.0",
   "description": "",
-  "main": "bindings/node",
-  "types": "bindings/node",
+  "main": "",
   "scripts": {
-    "build": "tree-sitter generate --no-bindings"
+    "build": "tree-sitter generate"
   },
   "keywords": [],
-  "files": [
-    "grammar.js",
-    "binding.gyp",
-    "prebuilds/**",
-    "bindings/node/*",
-    "queries/*",
-    "src/**"
-  ],
   "author": "",
-  "license": "ISC",
+  "license": "LGPL",
   "devDependencies": {
     "nan": "^2.22.0",
-    "tree-sitter-cli": "^0.22.6",
-    "prebuildify": "^6.0.0"
-  },
-  "tree-sitter": [
-    {
-      "scope": "source.vcl",
-      "file-types": [
-        "vcl"
-      ]
-    }
-  ],
-  "dependencies": {
-    "node-gyp-build": "^4.8.0"
-  },
-  "peerDependencies": {
-    "tree-sitter": "^0.22.0"
-  },
-  "peerDependenciesMeta": {
-    "tree_sitter": {
-      "optional": true
-    }
+    "tree-sitter-cli": "^0.24.4"
   }
 }
