@@ -364,7 +364,7 @@ impl LanguageServer for Backend {
                                 work_done_progress_options: Default::default(),
                                 legend: SemanticTokensLegend {
                                     token_types: LEGEND_TYPES.into(),
-                                    token_modifiers: vec!["defaultLibrary".into()],
+                                    token_modifiers: vec!["defaultLibrary".into(),"declaration".into()],
                                 },
                                 range: Some(false),
                                 full: Some(SemanticTokensFullOptions::Bool(true)),
