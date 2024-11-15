@@ -55,6 +55,8 @@
   operator: (operator (rmatch))
   right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
 
+
+
 (ident_call_expr
   ident: (nested_ident) @function)
 
@@ -64,6 +66,6 @@
 (func_call_named_arg
    arg_name: (ident) @parameter)
 
-(sub_declaration ident: (ident) @name) @function.declaration
-
+(sub_declaration ident: (ident) @function.declaration)
+(sub_declaration ident: (ident) @function.defaultLibrary (#match? @function.defaultLibrary "^vcl_.*"))
 (COMMENT) @comment
