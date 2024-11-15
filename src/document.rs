@@ -105,7 +105,10 @@ pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::VARIABLE,
 ];
 
-pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DEFAULT_LIBRARY,SemanticTokenModifier::DECLARATION];
+pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[
+    SemanticTokenModifier::DEFAULT_LIBRARY,
+    SemanticTokenModifier::DECLARATION,
+];
 
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
     let mut text = rope.byte_slice(node.byte_range()).to_string();
@@ -1559,7 +1562,7 @@ impl Document {
             line: usize,
             start: usize,
             token_type: usize, // LEGEND_TYPES is ordered, so we can order by this for precendence
-            modifier: usize,
+            modifier: Option<usize>,
             length: usize,
         }
 
@@ -1576,13 +1579,11 @@ impl Document {
             let Some(token_type) = LEGEND_TYPES.iter().position(|s| s.as_str() == name) else {
                 continue;
             };
-            let modifier = modifier_name
-                .and_then(|modifier_name| {
-                    LEGEND_MODIFIERS
-                        .iter()
-                        .position(|s| s.as_str() == modifier_name)
-                })
-                .unwrap_or(0);
+            let modifier = modifier_name.and_then(|modifier_name| {
+                LEGEND_MODIFIERS
+                    .iter()
+                    .position(|s| s.as_str() == modifier_name)
+            });
 
             for row in range.start_point.row..=range.end_point.row {
                 let start = if row == range.start_point.row {
@@ -1622,12 +1623,16 @@ impl Document {
                 } else {
                     tok.start
                 };
+                let mut token_modifiers_bitset: u32 = 0;
+                if let Some(modifier) = tok.modifier {
+                    token_modifiers_bitset |= 1 << modifier as u32;
+                }
                 let semtok = SemanticToken {
                     delta_start: delta_start as u32,
                     delta_line: delta_line as u32,
                     length: tok.length as u32,
                     token_type: tok.token_type as u32,
-                    token_modifiers_bitset: tok.modifier as u32,
+                    token_modifiers_bitset,
                 };
 
                 prev_line = tok.line;
