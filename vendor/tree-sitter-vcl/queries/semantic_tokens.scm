@@ -64,4 +64,6 @@
 (func_call_named_arg
    arg_name: (ident) @parameter)
 
+(sub_declaration ident: (ident) @name) @function.declaration
+
 (COMMENT) @comment

@@ -105,7 +105,7 @@ pub const LEGEND_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::VARIABLE,
 ];
 
-pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DEFAULT_LIBRARY];
+pub const LEGEND_MODIFIERS: &[SemanticTokenModifier] = &[SemanticTokenModifier::DEFAULT_LIBRARY,SemanticTokenModifier::DECLARATION];
 
 pub fn get_node_text<'a>(rope: &'a Rope, node: &'a Node) -> String {
     let mut text = rope.byte_slice(node.byte_range()).to_string();
