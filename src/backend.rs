@@ -11,7 +11,9 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
+use crate::document::{
+    Document, Include, LintErrorInternalType, NestedPos, VmodImport, LEGEND_TYPES,
+};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -376,6 +378,7 @@ impl LanguageServer for Backend {
                 rename_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -711,6 +714,51 @@ impl LanguageServer for Backend {
                 })
                 .collect(),
         )))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        debug!("code_action({:?})", params.context);
+        let doc_uri = params.text_document.uri;
+        let actions = params
+            .context
+            .diagnostics
+            .iter()
+            .filter_map(|diag| {
+                let Some(serde_json::Value::Number(ref lint_error_type_num)) = diag.data else {
+                    return None;
+                };
+
+                let lint_error_type_u8: u8 = lint_error_type_num.as_u64()?.try_into().ok()?;
+
+                if lint_error_type_u8 == LintErrorInternalType::PreferElseIf as u8 {
+                    return Some(CodeActionOrCommand::CodeAction(CodeAction {
+                        title: "Replace elsif with else if".into(),
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        edit: Some(WorkspaceEdit {
+                            document_changes: Some(DocumentChanges::Edits(vec![
+                                TextDocumentEdit {
+                                    text_document: OptionalVersionedTextDocumentIdentifier {
+                                        uri: doc_uri.to_owned(),
+                                        version: None,
+                                    },
+                                    edits: vec![OneOf::Left(TextEdit {
+                                        range: diag.range,
+                                        new_text: "else if".into(),
+                                    })],
+                                },
+                            ])),
+                            changes: None,
+                            change_annotations: None,
+                        }),
+                        ..Default::default()
+                    }));
+                }
+
+                None
+            })
+            .collect();
+
+        Ok(Some(actions))
     }
 }
 

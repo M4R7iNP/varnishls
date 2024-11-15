@@ -11,8 +11,10 @@ use crate::{
 
 use log::{debug, error};
 use ropey::{iter::Chunks, Rope};
+use serde_json::Value as SerdeValue;
 use std::sync::{Arc, Mutex};
 use std::{cmp::Ordering, iter::Iterator, path::PathBuf};
+use streaming_iterator::{convert as convert_to_streaming_iterator, StreamingIterator};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
@@ -62,11 +64,19 @@ pub struct Reference {
     pub uri: Location,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LintErrorInternalType {
+    PreferElseIf = 1,
+    PreferLowercaseHeader = 2,
+}
+
 #[derive(Debug)]
 pub struct LintError {
     pub message: String,
     pub severity: DiagnosticSeverity,
     pub loc: Location,
+    pub internal_type: Option<LintErrorInternalType>,
 }
 
 pub type NestedPos = Vec<(usize, usize)>;
@@ -286,7 +296,7 @@ impl Document {
     pub fn get_definition_by_name(&self, name: &str) -> Option<(Point, Point)> {
         let name_escaped = name.replace('"', "\\\"");
         let q = Query::new(
-            self.ast.language(),
+            &self.ast.language(),
             &format!(
                 r#"
                 [
@@ -302,10 +312,10 @@ impl Document {
         }
         let q = q.unwrap();
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("node").unwrap();
 
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             if let Some(capture) = each_match.captures.iter().find(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 return Some((range.start_point, range.end_point));
@@ -348,7 +358,7 @@ impl Document {
 
             let node = cursor.node();
             macro_rules! add_error {
-                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
+                (node: $node:expr, severity: $severity:expr, internal_type:$internal_type:expr, $($arg:tt)+) => {
                     let range = ts_range_to_lsp_range($node.range());
                     error_ranges.push(LintError {
                         message: format!($($arg)+),
@@ -357,22 +367,26 @@ impl Document {
                             range,
                         },
                         severity: $severity,
+                        internal_type: $internal_type,
                     });
                 };
+                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
+                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
+                };
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
                 }
             }
 
             macro_rules! add_hint {
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, internal_type: None, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::HINT, internal_type: None, $($arg)+);
                 }
             }
 
@@ -413,7 +427,7 @@ impl Document {
 
                     let left_ident_text = {
                         if matches!(left_node.kind(), "ident" | "nested_ident") {
-                            get_node_text(&self.rope, &left_node).to_lowercase()
+                            get_node_text(&self.rope, &left_node)
                         } else {
                             continue;
                         }
@@ -487,9 +501,10 @@ impl Document {
                                 .is_some()
                         {
                             add_error!(
-                                node: node,
+                                node: left_node,
                                 severity: config.prefer_lowercase_headers.lsp_severity().unwrap(),
-                                "Prefer lowercase headeres"
+                                internal_type: Some(LintErrorInternalType::PreferLowercaseHeader),
+                                "Prefer lowercase headers"
                             );
                         }
 
@@ -593,6 +608,7 @@ impl Document {
                         add_error!(
                             node: keyword_node,
                             severity: config.prefer_else_if.lsp_severity().unwrap(),
+                            internal_type: Some(LintErrorInternalType::PreferElseIf),
                             "Prefer «else if»"
                         );
                     }
@@ -959,19 +975,22 @@ impl Document {
                 range: lint_error.loc.range,
                 severity: Some(lint_error.severity),
                 message: lint_error.message.to_owned(),
+                data: lint_error
+                    .internal_type
+                    .map(|itype| SerdeValue::Number((itype as u8).into())),
                 ..Diagnostic::default()
             })
             .collect();
     }
 
     pub fn get_vmod_imports(&self) -> Vec<VmodImport> {
-        let q = Query::new(self.ast.language(), "(import_declaration (ident) @ident)").unwrap();
+        let q = Query::new(&self.ast.language(), "(import_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
 
         let mut imports = Vec::new();
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let ts_range = capture.node.range();
                 let name = get_node_text(&self.rope, &capture.node).to_string();
@@ -994,16 +1013,16 @@ impl Document {
 
     pub fn get_includes(&self) -> Vec<Include> {
         let q = Query::new(
-            self.ast.language(),
+            &self.ast.language(),
             "(include_declaration (string) @string)",
         )
         .unwrap();
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("string").unwrap();
 
         let mut includes = Vec::new();
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let range = capture.node.range();
                 let text = get_node_text(&self.rope, &capture.node);
@@ -1038,13 +1057,13 @@ impl Document {
     }
 
     pub fn get_subroutines(&self) -> Vec<String> {
-        let q = Query::new(self.ast.language(), "(sub_declaration (ident) @ident)").unwrap();
+        let q = Query::new(&self.ast.language(), "(sub_declaration (ident) @ident)").unwrap();
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let capt_idx = q.capture_index_for_name("ident").unwrap();
 
         let mut import_names: Vec<String> = Vec::new();
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             for capture in each_match.captures.iter().filter(|c| c.index == capt_idx) {
                 let text = get_node_text(&self.rope, &capture.node).to_string();
                 import_names.push(text);
@@ -1056,7 +1075,7 @@ impl Document {
 
     pub fn get_all_definitions(&self, scope_with_vmods: &Definitions) -> Vec<Definition> {
         let q = Query::new(
-            self.ast.language(),
+            &self.ast.language(),
             r#"
                 (toplev_declaration (_ (ident) @ident ) @node)
                 (new_stmt ident: (ident) @ident def_right: (ident_call_expr ident: (_) @def_ident)) @node
@@ -1069,13 +1088,13 @@ impl Document {
         let q = q.unwrap();
 
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let node_capt_idx = q.capture_index_for_name("node").unwrap();
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
         let def_ident_capt_idx = q.capture_index_for_name("def_ident").unwrap();
 
         let mut defs: Vec<Definition> = Vec::new();
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             let node_capture = each_match
                 .captures
                 .iter()
@@ -1138,7 +1157,7 @@ impl Document {
 
     pub fn get_references_for_ident(&self, ident: &str) -> Vec<Reference> {
         let q = Query::new(
-            self.ast.language(),
+            &self.ast.language(),
             &format!(
                 r#"
                 [
@@ -1155,11 +1174,11 @@ impl Document {
         let q = q.unwrap();
 
         let mut qc = QueryCursor::new();
-        let all_matches = qc.matches(&q, self.ast.root_node(), self);
+        let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
         let nested_ident_capt_idx = q.capture_index_for_name("nested_ident").unwrap();
         let mut refs: Vec<Reference> = Vec::new();
-        for each_match in all_matches {
+        while let Some(each_match) = all_matches.next() {
             let ident_capture = each_match
                 .captures
                 .iter()
@@ -1530,7 +1549,7 @@ impl Document {
         if matches!(self.filetype, FileType::Vtc) {
             query_str.push_str(VTC_QUERY);
         }
-        let q = Query::new(self.ast.language(), query_str.as_str()).unwrap();
+        let q = Query::new(&self.ast.language(), query_str.as_str()).unwrap();
         let mut qc = QueryCursor::new();
 
         let names = q.capture_names();
@@ -1545,7 +1564,10 @@ impl Document {
         }
 
         let mut tokens = vec![];
-        for c in qc.matches(&q, node, self).flat_map(|m| m.captures) {
+        let mut captures = qc
+            .matches(&q, node, self)
+            .flat_map(|m| convert_to_streaming_iterator(m.captures));
+        while let Some(c) = captures.next() {
             let node = c.node;
             let range = node.range();
             let mut capture_name = names.get(c.index as usize).unwrap().splitn(2, '.');
@@ -1628,7 +1650,7 @@ impl<'a> Iterator for RopeChunkBytesIterator<'a> {
 }
 
 // TextProvider for tree-sitter to use ropey as efficiently as possible
-impl<'a> TextProvider<'a> for &'a Document {
+impl<'a> TextProvider<&'a [u8]> for &'a Document {
     type I = RopeChunkBytesIterator<'a>;
     fn text(&mut self, node: Node) -> Self::I {
         RopeChunkBytesIterator {
