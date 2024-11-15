@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use log::debug;
+use log::{debug, error};
 use ropey::{iter::Chunks, Rope};
 use std::sync::{Arc, Mutex};
 use std::{cmp::Ordering, iter::Iterator, path::PathBuf};
@@ -584,7 +584,8 @@ impl Document {
                 }
                 "elsif_stmt" => {
                     let Some(keyword_node) = node.child_by_field_name("keyword") else {
-                        unreachable!("could not find keyword for elsif_stmt");
+                        error!("could not find keyword for elsif_stmt");
+                        continue;
                     };
 
                     let keyword = self.rope.byte_slice(keyword_node.byte_range()).to_string();
