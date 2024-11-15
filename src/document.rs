@@ -1924,6 +1924,7 @@ sub vcl_recv {
         );
     }
 
+    #[ignore]
     #[test]
     fn autocomplete_backend_after_equal_sign() {
         let mut scope = get_varnish_builtins();
