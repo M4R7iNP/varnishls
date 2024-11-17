@@ -750,7 +750,7 @@ impl LanguageServer for Backend {
             })
             .collect::<Vec<_>>();
 
-        if actions.len() == 0 {
+        if actions.is_empty() {
             return Ok(None);
         }
 

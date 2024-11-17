@@ -1,0 +1,10 @@
+pre-commit:
+  parallel: true
+  commands:
+    test:
+      run: cargo test -q
+    clippy:
+      run: cargo clippy --no-deps -- -D warnings
+
+output:
+  - failure
