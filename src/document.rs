@@ -11,7 +11,7 @@ use crate::{
 
 use log::{debug, error};
 use ropey::{iter::Chunks, Rope};
-use serde_json::Value as SerdeValue;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::{cmp::Ordering, iter::Iterator, path::PathBuf};
 use streaming_iterator::{convert as convert_to_streaming_iterator, StreamingIterator};
@@ -65,7 +65,7 @@ pub struct Reference {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LintErrorInternalType {
     PreferElseIf = 1,
     PreferLowercaseHeader = 2,
@@ -76,7 +76,14 @@ pub struct LintError {
     pub message: String,
     pub severity: DiagnosticSeverity,
     pub loc: Location,
-    pub internal_type: Option<LintErrorInternalType>,
+    pub data: Option<DiagnosticData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticData {
+    pub r#type: LintErrorInternalType,
+    pub quickfix_label: String,
+    pub replace_with: String,
 }
 
 pub type NestedPos = Vec<(usize, usize)>;
@@ -360,8 +367,20 @@ impl Document {
             }
 
             let node = cursor.node();
+            macro_rules! get_location {
+                (node: $node:expr) => {
+                    Location {
+                        uri: self.url.to_owned(),
+                        range: ts_range_to_lsp_range($node.range()),
+                    }
+                };
+                () => {
+                    get_location(node: node)
+                }
+            }
+
             macro_rules! add_error {
-                (node: $node:expr, severity: $severity:expr, internal_type:$internal_type:expr, $($arg:tt)+) => {
+                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
                     let range = ts_range_to_lsp_range($node.range());
                     error_ranges.push(LintError {
                         message: format!($($arg)+),
@@ -370,26 +389,23 @@ impl Document {
                             range,
                         },
                         severity: $severity,
-                        internal_type: $internal_type,
+                        data: None,
                     });
                 };
-                (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
-                };
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, internal_type: None, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, $($arg)+);
                 }
             }
 
             macro_rules! add_hint {
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, internal_type: None, $($arg)+);
+                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::HINT, internal_type: None, $($arg)+);
+                    add_error!(node: node, severity: DiagnosticSeverity::HINT, $($arg)+);
                 }
             }
 
@@ -503,12 +519,17 @@ impl Document {
                                 .and_then(|header_name| header_name.find(char::is_uppercase))
                                 .is_some()
                         {
-                            add_error!(
-                                node: left_node,
+                            error_ranges.push(LintError {
+                                message: "Prefer lowercase headers".into(),
+                                loc: get_location!(node: left_node),
                                 severity: config.prefer_lowercase_headers.lsp_severity().unwrap(),
-                                internal_type: Some(LintErrorInternalType::PreferLowercaseHeader),
-                                "Prefer lowercase headers"
-                            );
+                                data: Some(DiagnosticData {
+                                    r#type: LintErrorInternalType::PreferLowercaseHeader,
+                                    quickfix_label: "Downcase".into(),
+                                    replace_with: get_node_text(&self.rope, &left_node)
+                                        .to_lowercase(),
+                                }),
+                            });
                         }
 
                         if config.prefer_custom_headers_without_prefix.is_enabled()
@@ -608,12 +629,19 @@ impl Document {
 
                     let keyword = self.rope.byte_slice(keyword_node.byte_range()).to_string();
                     if config.prefer_else_if.is_enabled() && keyword != "else if" {
-                        add_error!(
-                            node: keyword_node,
+                        error_ranges.push(LintError {
+                            message: "Prefer «else if»".into(),
+                            loc: get_location!(node: keyword_node),
                             severity: config.prefer_else_if.lsp_severity().unwrap(),
-                            internal_type: Some(LintErrorInternalType::PreferElseIf),
-                            "Prefer «else if»"
-                        );
+                            data: Some(DiagnosticData {
+                                r#type: LintErrorInternalType::PreferElseIf,
+                                quickfix_label: format!(
+                                    "Replace {} with else if",
+                                    get_node_text(&self.rope, &keyword_node)
+                                ),
+                                replace_with: "else if".into(),
+                            }),
+                        });
                     }
                 }
                 "call_stmt" => {
@@ -979,8 +1007,9 @@ impl Document {
                 severity: Some(lint_error.severity),
                 message: lint_error.message.to_owned(),
                 data: lint_error
-                    .internal_type
-                    .map(|itype| SerdeValue::Number((itype as u8).into())),
+                    .data
+                    .as_ref()
+                    .and_then(|data| serde_json::to_value(data).ok()),
                 ..Diagnostic::default()
             })
             .collect();

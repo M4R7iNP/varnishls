@@ -1,6 +1,7 @@
 #![allow(deprecated)]
 use dashmap::DashMap;
 use log::{debug, error};
+use serde_json::from_value as from_json;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
@@ -11,9 +12,7 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{
-    Document, Include, LintErrorInternalType, NestedPos, VmodImport, LEGEND_TYPES,
-};
+use crate::document::{DiagnosticData, Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -364,7 +363,10 @@ impl LanguageServer for Backend {
                                 work_done_progress_options: Default::default(),
                                 legend: SemanticTokensLegend {
                                     token_types: LEGEND_TYPES.into(),
-                                    token_modifiers: vec!["defaultLibrary".into(),"declaration".into()],
+                                    token_modifiers: vec![
+                                        "defaultLibrary".into(),
+                                        "declaration".into(),
+                                    ],
                                 },
                                 range: Some(false),
                                 full: Some(SemanticTokensFullOptions::Bool(true)),
@@ -724,39 +726,33 @@ impl LanguageServer for Backend {
             .diagnostics
             .iter()
             .filter_map(|diag| {
-                let Some(serde_json::Value::Number(ref lint_error_type_num)) = diag.data else {
-                    return None;
-                };
+                let diag_data = from_json::<DiagnosticData>(diag.data.as_ref()?.to_owned()).ok()?;
 
-                let lint_error_type_u8: u8 = lint_error_type_num.as_u64()?.try_into().ok()?;
-
-                if lint_error_type_u8 == LintErrorInternalType::PreferElseIf as u8 {
-                    return Some(CodeActionOrCommand::CodeAction(CodeAction {
-                        title: "Replace elsif with else if".into(),
-                        kind: Some(CodeActionKind::QUICKFIX),
-                        edit: Some(WorkspaceEdit {
-                            document_changes: Some(DocumentChanges::Edits(vec![
-                                TextDocumentEdit {
-                                    text_document: OptionalVersionedTextDocumentIdentifier {
-                                        uri: doc_uri.to_owned(),
-                                        version: None,
-                                    },
-                                    edits: vec![OneOf::Left(TextEdit {
-                                        range: diag.range,
-                                        new_text: "else if".into(),
-                                    })],
-                                },
-                            ])),
-                            changes: None,
-                            change_annotations: None,
-                        }),
-                        ..Default::default()
-                    }));
-                }
-
-                None
+                Some(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: diag_data.quickfix_label,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    edit: Some(WorkspaceEdit {
+                        document_changes: Some(DocumentChanges::Edits(vec![TextDocumentEdit {
+                            text_document: OptionalVersionedTextDocumentIdentifier {
+                                uri: doc_uri.to_owned(),
+                                version: None,
+                            },
+                            edits: vec![OneOf::Left(TextEdit {
+                                range: diag.range,
+                                new_text: diag_data.replace_with,
+                            })],
+                        }])),
+                        changes: None,
+                        change_annotations: None,
+                    }),
+                    ..Default::default()
+                }))
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        if actions.len() == 0 {
+            return Ok(None);
+        }
 
         Ok(Some(actions))
     }
