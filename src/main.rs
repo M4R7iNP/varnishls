@@ -194,7 +194,7 @@ async fn main() -> ExitCode {
                         // print source code with context (one extra line above and below)
                         let start_line_idx = error.loc.range.start.line as usize;
                         let end_line_idx = error.loc.range.end.line as usize;
-                        for line_idx in (start_line_idx - 1).max(0)
+                        for line_idx in start_line_idx.checked_sub(1).unwrap_or(start_line_idx)
                             ..=(end_line_idx + 1).min(len_lines).min(start_line_idx + 9)
                         {
                             let line = doc.rope.line(line_idx);
