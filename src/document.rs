@@ -381,13 +381,9 @@ impl Document {
 
             macro_rules! add_error {
                 (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
-                    let range = ts_range_to_lsp_range($node.range());
                     error_ranges.push(LintError {
                         message: format!($($arg)+),
-                        loc: Location {
-                            uri: self.url.to_owned(),
-                            range,
-                        },
+                        loc: get_location!(node: $node),
                         severity: $severity,
                         data: None,
                     });
@@ -444,30 +440,34 @@ impl Document {
                         continue;
                     };
 
-                    let left_ident_text = {
-                        if matches!(left_node.kind(), "ident" | "nested_ident") {
-                            get_node_text(&self.rope, &left_node)
-                        } else {
-                            continue;
-                        }
-                    };
+                    if !matches!(left_node.kind(), "ident" | "nested_ident") {
+                        continue;
+                    }
+
+                    let left_ident_text = get_node_text(&self.rope, &left_node);
 
                     let left_parts = left_ident_text.split('.').collect::<Vec<_>>();
-                    if ["req", "bereq", "resp", "beresp"].contains(&left_parts[0]) {
+                    let first_left_part = left_parts[0].to_lowercase();
+                    if ["req", "bereq", "resp", "beresp", "obj"].contains(&first_left_part.as_str())
+                    {
+                        let is_http = left_parts.get(1).is_some_and(|ident| *ident == "http");
+
                         // Deprecated headers (from MDN)
-                        if matches!(left_parts.get(1), Some(&"http"))
-                            && matches!(
-                                left_parts.get(2),
-                                Some(&"content-dpr")
-                                    | Some(&"dnt")
-                                    | Some(&"dpr")
-                                    | Some(&"large-allocation")
-                                    | Some(&"pragma")
-                                    | Some(&"sec-ch-ua-full-version")
-                                    | Some(&"tk")
-                                    | Some(&"viewport-width")
-                                    | Some(&"width")
-                            )
+                        const DEPRECATED_HEADERS: &[&str] = &[
+                            "content-dpr",
+                            "dnt",
+                            "dpr",
+                            "large-allocation",
+                            "pragma",
+                            "sec-ch-ua-full-version",
+                            "tk",
+                            "viewport-width",
+                            "width",
+                        ];
+                        if is_http
+                            && left_parts
+                                .get(2)
+                                .is_some_and(|left_part_2| DEPRECATED_HEADERS.contains(left_part_2))
                         {
                             let hdr = left_parts[2];
                             add_hint!(node: left_node, "Deprecated header {hdr}");
@@ -477,17 +477,22 @@ impl Document {
                         if left_parts.get(1) == Some(&"ttl") {
                             let right_text = get_node_text(&self.rope, &right_node);
                             if matches!(right_text.as_str(), "0s" | "0") {
-                                add_hint!("Consider using .cacheable = false instead");
+                                add_hint!(
+                                    "Consider using {first_left_part}.cacheable = false instead"
+                                );
                             }
                         }
 
                         // Vary on header with many arbitrary values
-                        if left_parts.get(1) == Some(&"vary") {
+                        if is_http && left_parts.get(2) == Some(&"vary") {
                             let right_text = get_node_text(&self.rope, &right_node);
-                            if matches!(
-                                right_text.as_str().to_lowercase().as_str(),
-                                "*" | "user-agent" | "accept-encoding" | "accept-language"
-                            ) {
+                            const BAD_VARY_VALUES: &[&str] = &[
+                                "\"*\"",
+                                "\"user-agent\"",
+                                "\"accept-encoding\"",
+                                "\"accept-language\"",
+                            ];
+                            if BAD_VARY_VALUES.contains(&right_text.to_lowercase().as_str()) {
                                 add_hint!("Consider filtering header before vary");
                             }
                         }
@@ -513,7 +518,7 @@ impl Document {
                         }
 
                         if config.prefer_lowercase_headers.is_enabled()
-                            && matches!(left_parts.get(1), Some(&"http"))
+                            && is_http
                             && left_parts
                                 .get(2)
                                 .and_then(|header_name| header_name.find(char::is_uppercase))
@@ -532,9 +537,7 @@ impl Document {
                             });
                         }
 
-                        if config.prefer_custom_headers_without_prefix.is_enabled()
-                            && matches!(left_parts.get(1), Some(&"http"))
-                        {
+                        if config.prefer_custom_headers_without_prefix.is_enabled() && is_http {
                             if let Some(hdr) = left_parts.get(2) {
                                 let hdr = hdr.to_lowercase();
                                 if hdr.starts_with("x-") && !hdr.starts_with("x-forwarded-") {
@@ -1586,12 +1589,12 @@ impl Document {
 
         let names = q.capture_names();
 
-        #[derive(Eq, PartialEq, PartialOrd, Ord)]
+        #[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
         struct Token {
             line: usize,
             start: usize,
             token_type: usize, // LEGEND_TYPES is ordered, so we can order by this for precendence
-            modifier: Option<usize>,
+            modifier_bitset: usize,
             length: usize,
         }
 
@@ -1599,6 +1602,7 @@ impl Document {
         let mut captures = qc
             .matches(&q, node, self)
             .flat_map(|m| convert_to_streaming_iterator(m.captures));
+        let mut prev_node: Option<Node> = None;
         while let Some(c) = captures.next() {
             let node = c.node;
             let range = node.range();
@@ -1614,6 +1618,12 @@ impl Document {
                     .position(|s| s.as_str() == modifier_name)
             });
 
+            let mut modifier_bitset = 0;
+            if let Some(modifier) = modifier {
+                modifier_bitset |= 1 << modifier;
+            }
+
+            let is_multiline = range.start_point.row != range.end_point.row;
             for row in range.start_point.row..=range.end_point.row {
                 let start = if row == range.start_point.row {
                     let start_line = self.rope.line(row);
@@ -1629,13 +1639,22 @@ impl Document {
                     end_line.len_utf16_cu()
                 };
 
+                if !is_multiline && prev_node.is_some_and(|prev_node| prev_node == node) {
+                    let prev_token: &mut Token = tokens.last_mut().unwrap();
+                    if prev_token.token_type == token_type {
+                        prev_token.modifier_bitset |= modifier_bitset;
+                        continue;
+                    }
+                }
+
                 tokens.push(Token {
                     start,
                     line: row,
                     length: end - start,
                     token_type,
-                    modifier,
+                    modifier_bitset,
                 });
+                prev_node = Some(node);
             }
         }
 
@@ -1652,16 +1671,12 @@ impl Document {
                 } else {
                     tok.start
                 };
-                let mut token_modifiers_bitset: u32 = 0;
-                if let Some(modifier) = tok.modifier {
-                    token_modifiers_bitset |= 1 << modifier as u32;
-                }
                 let semtok = SemanticToken {
                     delta_start: delta_start as u32,
                     delta_line: delta_line as u32,
                     length: tok.length as u32,
                     token_type: tok.token_type as u32,
-                    token_modifiers_bitset,
+                    token_modifiers_bitset: tok.modifier_bitset as u32,
                 };
 
                 prev_line = tok.line;
