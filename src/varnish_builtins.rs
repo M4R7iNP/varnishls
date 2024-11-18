@@ -354,6 +354,11 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("via", Type::Backend),
         ("preamble", Type::Blob),
         ("authority", Type::String),
+        // Varnish Plus Backend SSL/TLS fields
+        ("ssl", Type::Number),
+        ("ssl_sni", Type::Number),
+        ("ssl_verify_peer", Type::Number),
+        ("ssl_verify_host", Type::Number),
     ])
 }
 
