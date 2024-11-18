@@ -154,7 +154,7 @@ module.exports = grammar({
         repeat($.elsif_stmt),
         optional($.else_stmt),
       ),
-    elsif_keyword: () => choice(seq('else', 'if'), 'elsif', 'elseif'),
+    elsif_keyword: () => choice(seq('else', 'if'), 'elsif', 'elseif', 'elif'),
     elsif_stmt: $ =>
       seq(
         field('keyword', $.elsif_keyword),
