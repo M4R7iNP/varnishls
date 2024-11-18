@@ -321,6 +321,8 @@ pub fn get_probe_field_types<'a>() -> HashMap<&'a str, Type> {
         ("window", Type::Number),
         ("threshold", Type::Number),
         ("initial", Type::Number),
+        // Varnish Plus
+        ("tcponly", Type::Number),
     ])
 }
 
@@ -400,6 +402,27 @@ pub fn get_varnish_builtins() -> Definitions {
             ("hash_ignore_busy".to_string(), Type::Bool),
             ("hash_always_miss".to_string(), Type::Bool),
             ("xid".to_string(), Type::String),
+        ]),
+        ..Obj::default()
+    });
+
+    let req_top: Type = Type::Obj(Obj {
+        name: "req_top".to_string(),
+        read_only: true,
+        properties: BTreeMap::from([
+            (
+                "http".to_string(),
+                Type::Obj(Obj {
+                    name: "req_top.http".to_string(),
+                    read_only: true,
+                    is_http_headers: true,
+                    properties: BTreeMap::new(),
+                    ..Obj::default()
+                }),
+            ),
+            ("url".to_string(), Type::String),
+            ("method".to_string(), Type::String),
+            ("proto".to_string(), Type::String),
         ]),
         ..Obj::default()
     });
@@ -658,6 +681,7 @@ pub fn get_varnish_builtins() -> Definitions {
         properties: BTreeMap::from([
             ("req".into(),       Definition::new_builtin("req".into(),       req      )),
             ("bereq".into(),     Definition::new_builtin("bereq".into(),     bereq    )),
+            ("req_top".into(),   Definition::new_builtin("req_top".into(),   req_top  )),
             ("resp".into(),      Definition::new_builtin("resp".into(),      resp     )),
             ("beresp".into(),    Definition::new_builtin("beresp".into(),    beresp   )),
             ("obj".into(),       Definition::new_builtin("obj".into(),       obj      )),

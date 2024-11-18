@@ -893,7 +893,7 @@ impl Document {
                             let parts = text.split('.').collect::<Vec<&str>>();
                             if sub_name.starts_with("vcl_") {
                                 let exists_in_sub = match parts[0] {
-                                    "req" => matches!(
+                                    "req" | "req_top" => matches!(
                                         sub_name,
                                         "vcl_recv"
                                             | "vcl_deliver"
