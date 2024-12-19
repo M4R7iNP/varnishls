@@ -87,25 +87,31 @@ impl<'a> Iterator for Tokenizer<'a> {
         let mut inside = false;
         let slice = &self.txt[self.cursor..];
 
+        macro_rules! emit_token {
+            ($value:expr) => {
+                Some(&slice[token_start..$value])
+            }
+        }
+
         for (i, c) in slice.char_indices() {
             self.cursor += 1;
             if let Some(q) = quote {
                 if c == q {
-                    return Some(&slice[token_start..(i + 1)]);
+                    return emit_token!(i + 1);
                 }
             } else if c.is_whitespace() {
                 if inside {
-                    return Some(&slice[token_start..i]);
+                    return emit_token!(i);
                 }
             } else if self.seps_str.contains(c) {
                 if inside {
                     self.cursor -= 1;
-                    return Some(&slice[token_start..i]);
+                    return emit_token!(i);
                 }
                 return Some(&slice[i..(i + 1)]);
             } else if self.quotes_str.contains(c) {
                 if inside {
-                    return Some(&slice[token_start..i]);
+                    return emit_token!(i);
                 }
                 quote = Some(c);
                 inside = true;
@@ -116,7 +122,7 @@ impl<'a> Iterator for Tokenizer<'a> {
             }
         }
 
-        None
+        emit_token!(slice.len()).filter(|s| !s.is_empty())
     }
 }
 
@@ -421,5 +427,11 @@ $Restrict vcl_pipe backend housekeeping
                 "housekeeping".to_string()
             ])
         );
+    }
+
+    #[test]
+    fn test_tokenizer_single_token() {
+        let toks = Tokenizer::new("License").collect::<Vec<_>>();
+        assert_eq!(toks, vec!["License"]);
     }
 }
