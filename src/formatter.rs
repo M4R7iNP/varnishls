@@ -7,7 +7,7 @@ use crate::config::FormatterConfig;
 static QUERY_MAIN: &str = include_str!("./formatter_queries/main.scm");
 static QUERY_IFS_LOOSE: &str = include_str!("./formatter_queries/ifs_loose.scm");
 static QUERY_IFS_TIGHT: &str = include_str!("./formatter_queries/ifs_tight.scm");
-static QUERY_FIX_ELSE_IFS: &str = include_str!("./formatter_queries/else_if.scm");
+// static QUERY_FIX_ELSE_IFS: &str = include_str!("./formatter_queries/else_if.scm");
 
 pub fn format(
     input: String,
@@ -19,14 +19,16 @@ pub fn format(
         crate::config::FormatIfStyle::Tight => QUERY_IFS_TIGHT,
     };
     query.push_str(query_large_ifs);
+    /*
     if config.fix_else_ifs {
         query.push_str(QUERY_FIX_ELSE_IFS);
     }
+    */
 
     let mut output = vec![];
     let mut input_bytes = input.as_bytes();
 
-    let vcl_gammar = tree_sitter_vcl::language();
+    let vcl_gammar = tree_sitter_vcl::LANGUAGE;
     let language = Language {
         name: "vcl".to_owned(),
         query: TopiaryQuery::new(&vcl_gammar.into(), &query).unwrap(),

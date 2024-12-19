@@ -85,28 +85,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1219,30 +1197,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-stream"
-version = "0.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f4e6ce100d0eb49a2734f8c0812bcd324cf357d21810932c5df6b96ef2b86f1"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2468baabc3311435b55dd935f702f42cd1b8abb7e754fb7dfb16bd36aa88f9f7"
-dependencies = [
- "async-stream",
- "bytes",
- "futures-core",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "tokio-util"
 version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1291,9 +1245,8 @@ dependencies = [
 
 [[package]]
 name = "topiary-core"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b26541394bdbcd5a039deb917b2096a69c6604f733f0d41f534fc6975987040d"
+version = "0.5.1"
+source = "git+https://github.com/tweag/topiary?rev=932cb223cf0eb73d536cec03ccb74b7b6a105294#932cb223cf0eb73d536cec03ccb74b7b6a105294"
 dependencies = [
  "futures",
  "itertools",
@@ -1302,30 +1255,31 @@ dependencies = [
  "prettydiff",
  "serde",
  "serde_json",
+ "streaming-iterator",
  "tokio",
- "tokio-test",
  "topiary-tree-sitter-facade",
  "topiary-web-tree-sitter-sys",
+ "tree-sitter",
 ]
 
 [[package]]
 name = "topiary-tree-sitter-facade"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea7c870d9a844bbba0f55be40eaa89624a9f627c155cd22eea70dd808bd71b3d"
+version = "0.5.1"
+source = "git+https://github.com/tweag/topiary?rev=932cb223cf0eb73d536cec03ccb74b7b6a105294#932cb223cf0eb73d536cec03ccb74b7b6a105294"
 dependencies = [
  "js-sys",
+ "streaming-iterator",
  "topiary-web-tree-sitter-sys",
- "tree-sitter 0.20.10",
+ "tree-sitter",
+ "tree-sitter-language",
  "wasm-bindgen",
  "web-sys",
 ]
 
 [[package]]
 name = "topiary-web-tree-sitter-sys"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc9e35caeeb7f07e97b71ee7ea204c89516e7cc490d1c2ae318eca3ff3c08d46"
+version = "0.5.1"
+source = "git+https://github.com/tweag/topiary?rev=932cb223cf0eb73d536cec03ccb74b7b6a105294#932cb223cf0eb73d536cec03ccb74b7b6a105294"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -1426,16 +1380,6 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.20.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e747b1f9b7b931ed39a548c1fae149101497de3c1fc8d9e18c62c1a66c683d3d"
-dependencies = [
- "cc",
- "regex",
-]
-
-[[package]]
-name = "tree-sitter"
 version = "0.24.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b67baf55e7e1b6806063b1e51041069c90afff16afcbbccd278d899f9d84bca4"
@@ -1532,7 +1476,7 @@ dependencies = [
  "toml",
  "topiary-core",
  "tower-lsp",
- "tree-sitter 0.24.4",
+ "tree-sitter",
  "tree-sitter-vcl",
  "tree-sitter-vtc",
 ]

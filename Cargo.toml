@@ -26,7 +26,8 @@ toml = "0.8"
 regex-syntax = { version = "0.8", features = ["std"], default-features = false }
 ansi_term = "0.12.1"
 streaming-iterator = { version = "0.1.9", features = ["std"] }
-topiary-core = "0.4.0"
+# topiary-core = { "0.5", rev = "932cb223cf0eb73d536cec03ccb74b7b6a105294" }
+topiary-core = { git = "https://github.com/tweag/topiary", rev = "932cb223cf0eb73d536cec03ccb74b7b6a105294" }
 
 [build-dependencies]
 cc = "1.0"
