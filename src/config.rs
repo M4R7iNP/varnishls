@@ -27,7 +27,7 @@ fn default_vmod_paths() -> Vec<PathBuf> {
 
 fn default_vcc_paths() -> Vec<PathBuf> {
     let default_from_env = std::env::var("VARNISHLS_VCC_PATHS")
-        .map(|env_str| env_str.split(';').map(Into::into).collect::<Vec<PathBuf>>())
+        .map(|env_str| env_str.split(':').map(Into::into).collect::<Vec<PathBuf>>())
         .ok();
 
     if let Some(default_from_env) = default_from_env {
