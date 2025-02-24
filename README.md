@@ -44,6 +44,8 @@ lsp_configs.varnishls = {
     settings = {},
   }
 }
+
+vim.filetype.add({ extension = { vcl = 'vcl', vtc = 'vtc' } })
 ```
 
 It is technically possible to use the tree-sitter grammar for syntax highlighting, but this is even more WIP than the lsp.
@@ -58,8 +60,6 @@ for _, lang in pairs({ "vcl", "vtc" }) do
     }
   }
 end
-
-vim.filetype.add({ extension = { vcl = 'vcl', vtc = 'vtc' } })
 ```
 
 Run `:TSInstallFromGrammar vcl` after adding the nvim-treesitter config.
