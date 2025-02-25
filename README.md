@@ -24,7 +24,9 @@ export VARNISHLS_VCC_PATHS="./lib:./vcc:/usr/share/varnish/vcc:/opt/homebrew/opt
 
 ### Vscode 
 
-Seperate repo. Bundles varnishls, does not need configuration, but will use it if it exists
+Seperate repo. Bundles varnishls
+> [!NOTE]
+> VSCode externtion does not need configuration, but will use it if it exists.
 
 https://github.com/auduny/vscode-vcl 
 https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language
