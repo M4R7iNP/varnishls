@@ -30,14 +30,13 @@ Now setup up your editor of choice
 
 ### VSCode 
 
-Seperate repo. Bundles varnishls
+Currently seperate repo. Bundles varnishls.
+
 > [!NOTE]
 > VSCode extention does not need configuration, but will use it if it exists.
 
-https://github.com/auduny/vscode-vcl 
-https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language
-
-
+* [Github Repo](https://github.com/auduny/vscode-vcl)
+* [VSCode Markedplace](https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language)
 
 ### Neovim
 
