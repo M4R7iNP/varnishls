@@ -97,7 +97,7 @@ install vcl-mode and add this to `.emacs`
 
 ## Config Override
 
-You can add .varnishls.toml in the root of your workspace and add overrides and tunings for spesific varnish configuration three. 
+You can add `.varnishls.toml` in the root of your workspace and add overrides and tunings for spesific varnish configuration three. 
 
 ```toml
 # .varnishls.toml in your workspace dir
