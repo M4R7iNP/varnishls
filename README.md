@@ -7,7 +7,7 @@
 ## Setup
 
 * Download a release for your platform and put it somewhere, preferably in path
-* Either install varnish locally or download VCC-files.zip [here](https://github.com/auduny/vscode-vcl/releases/download/v0.10.0/varnish-vcc-files.zip) and place them in `.varnishls/vcc`
+* Either install varnish locally or download `VCC-files.zip` [here](https://github.com/auduny/vscode-vcl/releases/download/v0.10.0/varnish-vcc-files.zip) and place them in `$HOME/.varnishls/vcc`
 
 
 ```shell
