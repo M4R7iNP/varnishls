@@ -16,33 +16,28 @@ cd $HOME/.varnishls
 unzip varnish-vcc-files.zip
 ```
 
-* Set `VARNISHLS_VCC_PATHS in `.profile`, `.zshrc` or `.bashrc`
+* Set `VARNISHLS_VCC_PATHS` in `.profile`, `.zshrc` or `.bashrc`
 
 ```shell
 export VARNISHLS_VCC_PATHS="./lib:./vcc:/usr/share/varnish/vcc:/opt/homebrew/opt/varnish/share/varnish/vcc:$HOME/.varnishls/vcc/"
 ```
 
-### Vscode 
+Now setup up your editor of choice 
+* [vscode](#VSCode)
+* [neovim](#Neovim)
+* [vim](#Vim)
+* [emacs](#Emacs)
+
+### VSCode 
 
 Seperate repo. Bundles varnishls
 > [!NOTE]
-> VSCode externtion does not need configuration, but will use it if it exists.
+> VSCode extention does not need configuration, but will use it if it exists.
 
 https://github.com/auduny/vscode-vcl 
 https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language
 
 
-### Vim
-
-vim-lsp using `prabirshrestha/vim-lsp`
-
-```vim
-au User lsp_setup call lsp#register_server({
-        \ 'name': 'varnishls',
-        \ 'cmd': {server_info->['/path/to/varnishls',"lsp","--stdio"]},
-        \ 'allowlist': ['vcl','vtc'],
-        \ })
-```
 
 ### Neovim
 
@@ -78,6 +73,18 @@ end
 ```
 
 Run `:TSInstallFromGrammar vcl` after adding the nvim-treesitter config.
+
+### Vim
+
+vim-lsp using `prabirshrestha/vim-lsp`
+
+```vim
+au User lsp_setup call lsp#register_server({
+        \ 'name': 'varnishls',
+        \ 'cmd': {server_info->['/path/to/varnishls',"lsp","--stdio"]},
+        \ 'allowlist': ['vcl','vtc'],
+        \ })
+```
 
 ### Emacs
 
