@@ -4,6 +4,9 @@ module.exports = grammar(vclGrammar, {
   name: 'vtc',
 
   extras: $ => [/\s/, $.COMMENT, $.inline_c, /\\\r?\n/],
+  conflicts: $ => [
+    [$.tls_config_statement]
+  ],
 
   rules: {
     COMMENT: () => token(seq('#', /.*/)),
@@ -22,30 +25,51 @@ module.exports = grammar(vclGrammar, {
         $.delay,
         $.shell,
         $.setenv,
+        $.logexpect,
+        $.feature_statement // Added feature_statement here
       ),
-    vtc_block_statement: $ => choice($.txrx_statement, $.expect),
+    feature_statement: $ => seq('feature', repeat1($.ident)), // Added feature_statement rule
+    loop_statement: $ => seq(
+      'loop',
+      $.number,
+      field('block', seq('{', repeat($.vtc_block_statement), '}'))
+    ),
+    txsettings: $ => 'txsettings', // Added txsettings rule
+    rxgoaway: $ => 'rxgoaway',   // Added rxgoaway rule
+    stream_block: $ => seq('stream', $.number, field('block', seq('{', repeat($.vtc_block_statement), '}')), repeat($.argument)), // Added stream_block rule
+    accept: $ => 'accept', // Added accept rule
+    vtc_block_statement: $ => choice($.txrx_statement, $.expect, $.expect_close, $.tls_config, $.tls_handshake, $.send, $.barrier, $.loop_statement, $.delay, $.accept, $.txsettings, $.rxgoaway, $.stream_block), // Added txsettings, rxgoaway, and stream_block
     varnishtest: $ => seq(choice('varnishtest', 'vtest'), $.string),
     server: $ =>
       seq(
         'server',
         $.ident,
-        field('block', seq('{', repeat($.vtc_block_statement), '}')),
+        repeat($.server_string_arguments),
+        optional(field('block', seq('{', repeat($.vtc_block_statement), '}'))), // Made block optional
         repeat($.argument),
       ),
     client: $ =>
       seq(
         'client',
         $.ident,
+        repeat($.client_string_arguments),
         optional(field('block', seq('{', repeat($.vtc_block_statement), '}'))),
+        repeat(choice($.argument)),
+      ),
+    tls_config: $ =>
+      seq(
+        'tls_config',
+        optional(field('block', seq('{', repeat($.tls_config_statement), '}'))),
         repeat($.argument),
       ),
+    tls_handshake: $ => 'tls_handshake',
     varnish: $ =>
       seq(
         'varnish',
         $.ident,
         repeat(choice($.vcl_argument, $.expect_argument, $.argument)),
       ),
-    barrier: $ => seq('barrier', $.ident, repeat($.argument)),
+    barrier: $ => seq('barrier', $.ident, choice('cond', 'sock', 'sync'), optional($.number), optional('-cyclic')),
     haproxy: $ => seq('haproxy', $.ident, repeat($.argument)),
     syslog: $ => seq('syslog', $.ident, repeat($.argument)),
     delay: $ => seq('delay', $.number),
@@ -69,11 +93,22 @@ module.exports = grammar(vclGrammar, {
         $.source_file_vcl,
         '}',
       ),
-
+    expect_statement: $ =>
+      seq(
+        'expect',
+        optional('*'),
+        $.number,
+        $.ident,
+        $.string
+      ),
     expect_argument: $ => seq('-expect', $.binary_expression),
     // TODO: try to generalize -arg {str}
     // body_argument: () => seq('-body', '{', /[^\}]+/, '}'),
     req_argument: $ => seq('-req', choice(/[A-Z]+/, $.string)), // e.g. -req POST
+    number_arguments: $ => seq('-repeat', $.number),
+    client_string_arguments: $ => seq(choice('-connect', '-proxy1', '-proxy2'), choice($.string, $.variable, $.number)),
+    server_string_arguments: $ => seq(choice('-listen', '-dispatch', '-repeat'), choice($.string, $.variable, $.number)),
+
     block_argument_value: () =>
       seq('{', repeat1(choice(/[^${}]+/, seq('${', /[^\}]+/, '}'))), '}'),
 
@@ -84,20 +119,55 @@ module.exports = grammar(vclGrammar, {
         2,
         seq(
           $.argument_ident,
-          optional(choice($.string, $.number, $.block_argument_value)),
+          optional(choice($.string, $.number, $.block_argument_value, $.ident)), // Added $.ident here
         ),
       ),
 
     txrx_statement: $ =>
       seq(
-        choice('rxreq', 'txresp', 'txreq', 'rxresp'),
+        choice('rxreq', 'txresp', 'txreq', 'rxresp', 'deplay'),
         repeat(choice($.req_argument, $.argument)),
       ),
     expect: $ => seq('expect', $.binary_expression),
+    expect_close: $ => 'expect_close',
+
 
     // <undef> is valid in «expect req.http.null-header == <undef>»
     literal: (_$, prev) => choice(prev, '<undef>'),
 
-    // _terminator: () => repeat1('\n'),
+    // _terminator: () => repeat1(\'\\\\n\'),
+
+    // Specific for values like "http/1.1", "example.com" that contain '.' or '/'
+    // and are not simple idents.
+    complex_config_value: () => token(prec(1, /[a-zA-Z0-9_.-]*[./][a-zA-Z0-9_./-]+/)),
+
+    config_value_item: $ => choice(
+      $.string,
+      $.variable,
+      $.tls_version,
+      $.complex_config_value, // For things like http/1.1
+      $.ident                 // For simple idents like h2, true, etc. (from VCL grammar)
+    ),
+
+    tls_config_statement: $ =>
+      seq(
+        $.ident,
+        '=',
+        repeat1($.config_value_item)
+      ),
+
+    variable: $ => seq('${', $.ident, '}'),
+    send: $ => seq('send', choice($.string, $.number)), // Modified to accept string or number
+    tls_version: $ => choice('TLSv1.0', 'TLSv1.1', 'TLSv1.2', 'TLSv1.3'),
+    logexpect_expect: $ => seq('expect', /.*/),
+    logexpect: $ =>
+      seq(
+        'logexpect',
+        $.ident,
+        (optional(seq('-v', $.ident))),
+        (optional(seq('-g', $.ident))),
+        optional(field('block', seq('{', repeat($.logexpect_expect), '}'))),
+        repeat(choice($.argument)),
+      ),
   },
 });
