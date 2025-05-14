@@ -23,20 +23,20 @@ export VARNISHLS_VCC_PATHS="./lib:./vcc:/usr/share/varnish/vcc:/opt/homebrew/opt
 ```
 
 Now setup up your editor of choice
-* [vscode](#VSCode)
-* [neovim](#Neovim)
-* [vim](#Vim)
-* [emacs](#Emacs)
+* [VSCode](#VSCode)
+* [Neovim](#Neovim)
+* [Vim](#Vim)
+* [Emacs](#Emacs)
 
 ### VSCode
 
-Currently seperate repo. Bundles varnishls.
+Currently separate repo. Bundles varnishls.
 
 > [!NOTE]
-> VSCode extention does not need configuration, but will use it if it exists.
+> VSCode extension does not need configuration, but will use it if it exists.
 
-* [Github Repo](https://github.com/auduny/vscode-vcl)
-* [VSCode Markedplace](https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language)
+* [GitHub Repo](https://github.com/auduny/vscode-vcl)
+* [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=audun-ytterdal.varnish-configuration-language)
 
 ### Neovim
 
@@ -91,7 +91,7 @@ au User lsp_setup call lsp#register_server({
 
 ### Emacs
 
-install vcl-mode and add this to `.emacs`
+Install vcl-mode and add this to `.emacs`
 
 ```lisp
 (with-eval-after-load 'eglot
