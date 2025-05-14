@@ -1,12 +1,12 @@
 # varnishls
 
-`varnishls` is a Varnish Language Server. Provides some autocomplete, jump to definition across files and basic linting. Made for Varnish 6.0 (plus), but it should work with other versions - except Fastly.
+`varnishls` is a Varnish Language Server. Provides some autocomplete, jump to definition across files and basic linting. Made for Varnish 6.0 (Enterprise), but it should work with other versions — except Fastly.
 
 [![asciicast](https://asciinema.org/a/575554.svg)](https://asciinema.org/a/575554)
 
 ## Setup
 
-* Download a release for your platform and put it somewhere, preferably in path
+* Download a release for your platform and put it somewhere, preferably in $PATH
 * Either install varnish locally or download `VCC-files.zip` [here](https://github.com/auduny/vscode-vcl/releases/download/v0.10.0/varnish-vcc-files.zip) and place them in `$HOME/.varnishls/vcc`
 
 
@@ -22,13 +22,13 @@ unzip varnish-vcc-files.zip
 export VARNISHLS_VCC_PATHS="./lib:./vcc:/usr/share/varnish/vcc:/opt/homebrew/opt/varnish/share/varnish/vcc:$HOME/.varnishls/vcc/"
 ```
 
-Now setup up your editor of choice 
+Now setup up your editor of choice
 * [vscode](#VSCode)
 * [neovim](#Neovim)
 * [vim](#Vim)
 * [emacs](#Emacs)
 
-### VSCode 
+### VSCode
 
 Currently seperate repo. Bundles varnishls.
 
@@ -40,21 +40,25 @@ Currently seperate repo. Bundles varnishls.
 
 ### Neovim
 
+Install [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig)
+
+Create a file in `~/.config/nvim/lsp/varnishls.lua`:
+
 ```lua
-local lspconfig = require('lspconfig')
-local lsp_configs = require('lspconfig.configs')
-
-lsp_configs.varnishls = {
-  default_config = {
-    -- Change the path to varnishls (add --debug for debug log)
-    cmd = { "/path/to/varnishls", "lsp", "--stdio" },
-    filetypes = { "vcl", "vtc" },
-    root_dir = lspconfig.util.root_pattern(".varnishls.toml", ".git"),
-    settings = {},
-  }
+return {
+  -- Point to varnishls (add --debug for debug log)
+  cmd = { "varnishls", "lsp", "--stdio" },
+  filetypes = { "vcl", "vtc" },
+  root_markers = { ".varnishls.toml", ".git" },
+  settings = {},
 }
+```
 
+And add this in your `init.lua`:
+
+```lua
 vim.filetype.add({ extension = { vcl = 'vcl', vtc = 'vtc' } })
+vim.lsp.enable('varnishls')
 ```
 
 It is technically possible to use the tree-sitter grammar for syntax highlighting, but this is even more WIP than the lsp.
@@ -97,7 +101,7 @@ install vcl-mode and add this to `.emacs`
 
 ## Config Override
 
-You can add `.varnishls.toml` in the root of your workspace and add overrides and tunings for spesific varnish configuration three. 
+You can add `.varnishls.toml` in the root of your workspace and add overrides and tunings for specific Varnish configuration there.
 
 ```toml
 # .varnishls.toml in your workspace dir
@@ -123,9 +127,7 @@ make tree-sitter-vcl tree-sitter-vtc
 make build
 ```
 
-
-
-### Inspiration:
+## Inspiration
 
 - [tree-sitter-c](https://github.com/tree-sitter/tree-sitter-c/blob/master/grammar.js)
 - [tower-lsp-boilerplate](https://github.com/IWANABETHATGUY/tower-lsp-boilerplate)
