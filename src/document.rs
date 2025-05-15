@@ -1770,7 +1770,7 @@ pub fn node_to_type(node: &Node) -> Option<Type> {
         "string_list" => Some(Type::String),
         "number" => Some(Type::Number),
         "duration" => Some(Type::Duration),
-        "bytes" => Some(Type::Bytes), // Added bytes here
+        "bytes" => Some(Type::Bytes),
         "bool" => Some(Type::Bool),
         "inline_probe" => Some(Type::Probe),
         "literal" => node_to_type(&node.child(0)?),

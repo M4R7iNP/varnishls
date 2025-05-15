@@ -408,7 +408,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("hash_ignore_busy".to_string(), Type::Bool),
             ("hash_always_miss".to_string(), Type::Bool),
             ("hash_always_vary".to_string(), Type::Bool),
-            ("esi_level".to_string(), Type::Bool),
+            ("esi_level".to_string(), Type::Number),
             ("xid".to_string(), Type::String),
         ]),
         ..Obj::default()
@@ -536,7 +536,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("ttl".to_string(), Type::Duration),
             ("uncacheable".to_string(), Type::Bool),
             ("was_304".to_string(), Type::Bool),
-            ("transit_buffer".to_string(), Type::Backend),
+            ("transit_buffer".to_string(), Type::Bytes),
         ]),
         ..Obj::default()
     });
