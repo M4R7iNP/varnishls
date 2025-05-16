@@ -30,6 +30,7 @@ pub enum Type {
     Blob,
     IP,
     Body,
+    Bytes,
 }
 
 impl Type {
@@ -76,6 +77,7 @@ impl std::fmt::Display for Type {
             Type::Blob => write!(f, "BLOB"),
             Type::IP => write!(f, "IP"),
             Type::Body => write!(f, "BODY"),
+            Type::Bytes => write!(f, "BYTES"),
         }
     }
 }
@@ -335,6 +337,7 @@ pub const BACKEND_FIELDS: &[&str] = &[
     "connect_timeout",
     "first_byte_timeout",
     "between_bytes_timeout",
+    "last_byte_timeout", // varnish enterprise
     "probe",
     "max_connections",
     "proxy_header",
@@ -349,6 +352,7 @@ pub fn get_backend_field_types<'a>() -> HashMap<&'a str, Type> {
         ("connect_timeout", Type::Duration),
         ("first_byte_timeout", Type::Duration),
         ("between_bytes_timeout", Type::Duration),
+        ("last_byte_timeout", Type::Duration),
         ("probe", Type::Probe),
         ("max_connections", Type::String),
         ("proxy_header", Type::String),
@@ -389,7 +393,6 @@ pub fn get_varnish_builtins() -> Definitions {
             ),
             ("url".to_string(), Type::String),
             ("method".to_string(), Type::String),
-            // ("hash".to_string(), Type::String), // varnish 3?
             ("proto".to_string(), Type::String),
             ("backend_hint".to_string(), Type::Backend),
             ("restarts".to_string(), Type::Number),
@@ -397,10 +400,15 @@ pub fn get_varnish_builtins() -> Definitions {
             ("grace".to_string(), Type::Duration),
             ("is_hitmiss".to_string(), Type::Bool),
             ("is_hitpass".to_string(), Type::Bool),
-            ("do_esi".to_string(), Type::Bool),
-            ("can_gzip".to_string(), Type::Bool),
+            ("storage".to_string(), Type::String), // This is really a Stevedore
+            ("time".to_string(), Type::Time),
+            ("trace".to_string(), Type::Bool),
+            ("transport".to_string(), Type::String),
+            ("hash".to_string(), Type::String),
             ("hash_ignore_busy".to_string(), Type::Bool),
             ("hash_always_miss".to_string(), Type::Bool),
+            ("hash_always_vary".to_string(), Type::Bool),
+            ("esi_level".to_string(), Type::Number),
             ("xid".to_string(), Type::String),
         ]),
         ..Obj::default()
@@ -449,12 +457,17 @@ pub fn get_varnish_builtins() -> Definitions {
             ("method".to_string(), Type::String),
             ("xid".to_string(), Type::String),
             ("retries".to_string(), Type::Number),
-            // ("hash".to_string(), Type::String),
+            ("hash".to_string(), Type::String),
             ("proto".to_string(), Type::String),
             ("backend".to_string(), Type::Backend),
             ("uncacheable".to_string(), Type::Bool),
             ("is_bgfetch".to_string(), Type::Bool),
+            ("is_hitmiss".to_string(), Type::Bool),
             ("body".to_string(), Type::Body),
+            ("connect_timeout".to_string(), Type::Duration),
+            ("first_byte_timeout".to_string(), Type::Duration),
+            ("between_bytes_timeout".to_string(), Type::Duration),
+            ("last_byte_timeout".to_string(), Type::Duration),
         ]),
         ..Obj::default()
     });
@@ -523,6 +536,7 @@ pub fn get_varnish_builtins() -> Definitions {
             ("ttl".to_string(), Type::Duration),
             ("uncacheable".to_string(), Type::Bool),
             ("was_304".to_string(), Type::Bool),
+            ("transit_buffer".to_string(), Type::Bytes),
         ]),
         ..Obj::default()
     });

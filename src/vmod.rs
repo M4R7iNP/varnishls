@@ -67,7 +67,7 @@ fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
                 "IP" => Some(Type::IP),
                 "DURATION" => Some(Type::Duration),
                 "TIME" => Some(Type::Time),
-                "BYTES" => Some(Type::String), // for now
+                "BYTES" => Some(Type::Bytes),
                 "BLOB" => Some(Type::Blob),
                 "BACKEND" => Some(Type::Backend),
                 "PROBE" => Some(Type::Probe),
