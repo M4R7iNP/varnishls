@@ -182,15 +182,17 @@ pub struct Definition {
     // pub doc_url: Option<String>,
     pub loc: Option<Location>,
     pub nested_pos: NestedPos,
+    pub doc: Option<String>, // Added field for documentation
 }
 
 impl Definition {
-    pub fn new_builtin(ident_str: String, r#type: Type) -> Definition {
+    pub fn new_builtin(ident_str: String, r#type: Type, doc: Option<String>) -> Definition {
         Definition {
             ident_str,
             r#type: Box::new(r#type),
             loc: None,
-            nested_pos: Default::default(),
+            nested_pos: vec![], // Changed from NestedPos::Builtin
+            doc,
         }
     }
 }
@@ -373,270 +375,849 @@ pub const RETURN_METHODS: &[&str] = &[
     "abandon", "lookup", "error", "purge",
 ];
 pub fn get_varnish_builtins() -> Definitions {
-    let req: Type = Type::Obj(Obj {
-        name: "req".to_string(),
+    let mut req_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
         read_only: false,
-        properties: BTreeMap::from([
-            (
-                "http".to_string(),
-                Type::Obj(Obj {
-                    name: "req.http".to_string(),
-                    read_only: false,
-                    is_http_headers: true,
-                    properties: BTreeMap::from_iter(
-                        DEFAULT_REQUEST_HEADERS
-                            .iter()
-                            .map(|header| (header.to_string(), Type::String)),
-                    ),
-                    ..Obj::default()
-                }),
-            ),
-            ("url".to_string(), Type::String),
-            ("method".to_string(), Type::String),
-            ("proto".to_string(), Type::String),
-            ("backend_hint".to_string(), Type::Backend),
-            ("restarts".to_string(), Type::Number),
-            ("ttl".to_string(), Type::Duration),
-            ("grace".to_string(), Type::Duration),
-            ("is_hitmiss".to_string(), Type::Bool),
-            ("is_hitpass".to_string(), Type::Bool),
-            ("storage".to_string(), Type::String), // This is really a Stevedore
-            ("time".to_string(), Type::Time),
-            ("trace".to_string(), Type::Bool),
-            ("transport".to_string(), Type::String),
-            ("hash".to_string(), Type::String),
-            ("hash_ignore_busy".to_string(), Type::Bool),
-            ("hash_always_miss".to_string(), Type::Bool),
-            ("hash_always_vary".to_string(), Type::Bool),
-            ("esi_level".to_string(), Type::Number),
-            ("xid".to_string(), Type::String),
-        ]),
-        ..Obj::default()
-    });
+        definition: Some(Definition::new_builtin(
+            "req.http".into(),
+            Type::String, // This is a simplification, as it can be various types.
+            Some("The headers of request, things like req.http.date.".to_string()),
+        )),
+    };
+    for header in DEFAULT_REQUEST_HEADERS.iter() {
+        req_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: false,
+                is_http_headers: false, // Individual headers are not themselves header collections
+                definition: Some(Definition::new_builtin(
+                    format!("req.http.{}", header),
+                    Type::String,
+                    None, // Placeholder for individual header documentation
+                )),
+                ..Default::default()
+            }),
+        );
+    }
 
-    let req_top: Type = Type::Obj(Obj {
-        name: "req_top".to_string(),
+    let req = Type::Obj(Obj {
+        name: "req".into(),
         read_only: true,
-        properties: BTreeMap::from([
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "req".into(),
+            Type::String, // Simplified
+            Some("These variables describe the present request".to_string()),
+        )),
+        properties: HashMap::from([
             (
-                "http".to_string(),
+                "ttl".into(),
                 Type::Obj(Obj {
-                    name: "req_top.http".to_string(),
-                    read_only: true,
-                    is_http_headers: true,
-                    properties: BTreeMap::new(),
-                    ..Obj::default()
-                }),
-            ),
-            ("url".to_string(), Type::String),
-            ("method".to_string(), Type::String),
-            ("proto".to_string(), Type::String),
-        ]),
-        ..Obj::default()
-    });
-
-    let bereq: Type = Type::Obj(Obj {
-        name: "bereq".to_string(),
-        read_only: false,
-        properties: BTreeMap::from([
-            (
-                "http".to_string(),
-                Type::Obj(Obj {
-                    name: "bereq.http".to_string(),
+                    name: "ttl".into(),
                     read_only: false,
-                    is_http_headers: true,
-                    properties: BTreeMap::from_iter(
-                        DEFAULT_REQUEST_HEADERS
-                            .iter()
-                            .map(|header| (header.to_string(), Type::String)),
-                    ),
-                    ..Obj::default()
-                }),
-            ),
-            ("url".to_string(), Type::String),
-            ("method".to_string(), Type::String),
-            ("xid".to_string(), Type::String),
-            ("retries".to_string(), Type::Number),
-            ("hash".to_string(), Type::String),
-            ("proto".to_string(), Type::String),
-            ("backend".to_string(), Type::Backend),
-            ("uncacheable".to_string(), Type::Bool),
-            ("is_bgfetch".to_string(), Type::Bool),
-            ("is_hitmiss".to_string(), Type::Bool),
-            ("body".to_string(), Type::Body),
-            ("connect_timeout".to_string(), Type::Duration),
-            ("first_byte_timeout".to_string(), Type::Duration),
-            ("between_bytes_timeout".to_string(), Type::Duration),
-            ("last_byte_timeout".to_string(), Type::Duration),
-        ]),
-        ..Obj::default()
-    });
-
-    let resp: Type = Type::Obj(Obj {
-        name: "resp".to_string(),
-        read_only: false,
-        properties: BTreeMap::from([
-            (
-                "http".to_string(),
-                Type::Obj(Obj {
-                    name: "req.http".to_string(),
-                    read_only: false,
-                    is_http_headers: true,
-                    properties: BTreeMap::from_iter(
-                        DEFAULT_RESPONSE_HEADERS
-                            .iter()
-                            .map(|header| (header.to_string(), Type::String)),
-                    ),
-                    ..Obj::default()
-                }),
-            ),
-            ("status".to_string(), Type::Number),
-            ("reason".to_string(), Type::String),
-            ("backend".to_string(), Type::Backend),
-            ("is_streaming".to_string(), Type::Bool),
-            ("body".to_string(), Type::Body),
-        ]),
-        ..Obj::default()
-    });
-
-    let beresp: Type = Type::Obj(Obj {
-        name: "beresp".to_string(),
-        read_only: false,
-        properties: BTreeMap::from([
-            (
-                "http".to_string(),
-                Type::Obj(Obj {
-                    name: "req.http".to_string(),
-                    read_only: false,
-                    is_http_headers: true,
-                    properties: BTreeMap::from_iter(
-                        DEFAULT_RESPONSE_HEADERS
-                            .iter()
-                            .map(|header| (header.to_string(), Type::String)),
-                    ),
-                    ..Obj::default()
-                }),
-            ),
-            ("age".to_string(), Type::Duration),
-            ("backend.ip".to_string(), Type::String),
-            ("backend.name".to_string(), Type::String),
-            ("backend".to_string(), Type::Backend),
-            ("body".to_string(), Type::Body),
-            ("do_esi".to_string(), Type::Bool),
-            ("do_gunzip".to_string(), Type::Bool),
-            ("do_gzip".to_string(), Type::Bool),
-            ("do_stream".to_string(), Type::Bool),
-            ("grace".to_string(), Type::Duration),
-            ("keep".to_string(), Type::Duration),
-            ("proto".to_string(), Type::String),
-            ("reason".to_string(), Type::String),
-            ("status".to_string(), Type::Number),
-            // ("storage".to_string(), Type::String),
-            ("storage_hint".to_string(), Type::String),
-            ("ttl".to_string(), Type::Duration),
-            ("uncacheable".to_string(), Type::Bool),
-            ("was_304".to_string(), Type::Bool),
-            ("transit_buffer".to_string(), Type::Bytes),
-        ]),
-        ..Obj::default()
-    });
-
-    let obj: Type = Type::Obj(Obj {
-        name: "obj".to_string(),
-        read_only: false,
-        properties: BTreeMap::from([
-            ("ttl".to_string(), Type::Duration),
-            ("grace".to_string(), Type::Duration),
-            ("keep".to_string(), Type::Duration),
-            ("age".to_string(), Type::Duration),
-            ("hits".to_string(), Type::Number),
-            ("uncacheable".to_string(), Type::Bool),
-            (
-                "http".to_string(),
-                Type::Obj(Obj {
-                    name: "obj.http".to_string(),
-                    read_only: false,
-                    is_http_headers: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.ttl".into(),
+                        Type::Duration,
+                        Some("Upper limit on the object age for cache lookups to return hit.".to_string()),
+                    )),
                     ..Default::default()
                 }),
             ),
-        ]),
-        ..Obj::default()
+            (
+                "grace".into(),
+                Type::Obj(Obj {
+                    name: "grace".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.grace".into(),
+                        Type::Duration,
+                        Some("Upper limit on the object grace.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "xid".into(),
+                Type::Obj(Obj {
+                    name: "xid".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.xid".into(),
+                        Type::String,
+                        Some("Unique ID of this request.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "restarts".into(),
+                Type::Obj(Obj {
+                    name: "restarts".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.restarts".into(),
+                        Type::Number,
+                        Some("A count of how many times this request has been restarted.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "backend_hint".into(),
+                Type::Obj(Obj {
+                    name: "backend_hint".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.backend_hint".into(),
+                        Type::Backend,
+                        Some("Set bereq.backend to this if we attempt to fetch.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "hash_ignore_busy".into(),
+                Type::Obj(Obj {
+                    name: "hash_ignore_busy".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.hash_ignore_busy".into(),
+                        Type::Bool,
+                        Some("Ignore any busy object during cache lookup.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "hash_always_miss".into(),
+                Type::Obj(Obj {
+                    name: "hash_always_miss".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.hash_always_miss".into(),
+                        Type::Bool,
+                        Some("Ignore regular cache lookups and mark the request as a miss.".to_string()), // Doc from common knowledge / general Varnish behavior
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "can_gzip".into(),
+                Type::Obj(Obj {
+                    name: "can_gzip".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.can_gzip".into(),
+                        Type::Bool,
+                        Some("True if the client provided gzip or x-gzip in the Accept-Encoding header.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "method".into(),
+                Type::Obj(Obj {
+                    name: "method".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.method".into(),
+                        Type::String,
+                        Some("The request method (e.g. \"GET\", \"HEAD\", ...).".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "url".into(),
+                Type::Obj(Obj {
+                    name: "url".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.url".into(),
+                        Type::String,
+                        Some("The requested URL, for instance \"/robots.txt\".".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "proto".into(),
+                Type::Obj(Obj {
+                    name: "proto".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.proto".into(),
+                        Type::String,
+                        Some("The HTTP protocol version used by the client, usually \"HTTP/1.1\" or \"HTTP/2.0\".".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "esi_level".into(),
+                Type::Obj(Obj {
+                    name: "esi_level".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "req.esi_level".into(),
+                        Type::Number,
+                        Some("A count of how many levels of ESI requests we're currently at.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            // req.http.Header
+            ("http".into(), Type::Obj(req_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
     });
 
-    let sess: Type = Type::Obj(Obj {
-        name: "sess".to_string(),
-        properties: BTreeMap::from([
-            ("timeout_idle".to_string(), Type::Duration),
-            ("xid".to_string(), Type::String),
-        ]),
-        ..Obj::default()
-    });
+    let mut bereq_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
+        read_only: false,
+        definition: Some(Definition::new_builtin(
+            "bereq.http".into(),
+            Type::String, // Simplified
+            Some("The headers of the backend request.".to_string()),
+        )),
+    };
+    for header in DEFAULT_REQUEST_HEADERS.iter() { // Should ideally be DEFAULT_BACKEND_REQUEST_HEADERS if different
+        bereq_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: false,
+                is_http_headers: false,
+                definition: Some(Definition::new_builtin(
+                    format!("bereq.http.{}", header),
+                    Type::String,
+                    None, // Placeholder
+                )),
+                ..Default::default()
+            }),
+        );
+    }
 
-    let client: Type = Type::Obj(Obj {
-        name: "client".to_string(),
+    let bereq = Type::Obj(Obj {
+        name: "bereq".into(),
         read_only: true,
-        properties: BTreeMap::from([
-            ("ip".to_string(), Type::String),
-            ("identity".to_string(), Type::String),
-        ]),
-        ..Obj::default()
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "bereq".into(),
+            Type::String, // Simplified
+            Some("This is the request we send to the backend".to_string()),
+        )),
+        properties: HashMap::from([
+            (
+                "xid".into(),
+                Type::Obj(Obj {
+                    name: "xid".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "bereq.xid".into(),
+                        Type::String,
+                        Some("Unique ID of this backend request.".to_string()), // Doc from common knowledge
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            // bereq.http.Header
+            ("http".into(), Type::Obj(bereq_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
     });
 
-    let server: Type = Type::Obj(Obj {
-        name: "server".to_string(),
+    let mut req_top_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
+        read_only: false,
+        definition: Some(Definition::new_builtin(
+            "req_top.http".into(),
+            Type::String, // Simplified
+            Some("HTTP headers of the top-level request in a tree of ESI requests.".to_string()),
+        )),
+    };
+    for header in DEFAULT_REQUEST_HEADERS.iter() {
+        req_top_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: false,
+                is_http_headers: false,
+                definition: Some(Definition::new_builtin(
+                    format!("req_top.http.{}", header),
+                    Type::String,
+                    None, // Placeholder
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    let req_top = Type::Obj(Obj {
+        name: "req_top".into(),
         read_only: true,
-        properties: BTreeMap::from([
-            ("ip".to_string(), Type::String),
-            ("hostname".to_string(), Type::String),
-            ("identity".to_string(), Type::String),
-        ]),
-        ..Obj::default()
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "req_top".into(),
+            Type::String, // Simplified
+            Some("When ESI:include requests are being processed, req_top points to the request received from the client.".to_string()),
+        )),
+        properties: HashMap::from([
+            // req_top.http.Header
+            ("http".into(), Type::Obj(req_top_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
     });
 
-    let local: Type = Type::Obj(Obj {
-        name: "local".to_string(),
+    let mut resp_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
+        read_only: false,
+        definition: Some(Definition::new_builtin(
+            "resp.http".into(),
+            Type::String, // Simplified
+            Some("The headers of the response sent to the client.".to_string()),
+        )),
+    };
+    for header in DEFAULT_RESPONSE_HEADERS.iter() {
+        resp_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: false,
+                is_http_headers: false,
+                definition: Some(Definition::new_builtin(
+                    format!("resp.http.{}", header),
+                    Type::String,
+                    None, // Placeholder
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    let resp = Type::Obj(Obj {
+        name: "resp".into(),
         read_only: true,
-        properties: BTreeMap::from([
-            ("ip".to_string(), Type::String),
-            ("endpoint".to_string(), Type::String),
-            ("socket".to_string(), Type::String),
-        ]),
-        ..Obj::default()
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "resp".into(),
+            Type::String, // Simplified
+            Some("This is the response we send to the client".to_string()),
+        )),
+        properties: HashMap::from([
+            // resp.http.Header
+            ("http".into(), Type::Obj(resp_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
     });
 
-    let remote: Type = Type::Obj(Obj {
-        name: "remote".to_string(),
+    let mut beresp_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
+        read_only: false,
+        definition: Some(Definition::new_builtin(
+            "beresp.http".into(),
+            Type::String, // Simplified
+            Some("The headers of the response received from the backend.".to_string()),
+        )),
+    };
+    for header in DEFAULT_RESPONSE_HEADERS.iter() {
+        beresp_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: false,
+                is_http_headers: false,
+                definition: Some(Definition::new_builtin(
+                    format!("beresp.http.{}", header),
+                    Type::String,
+                    None, // Placeholder
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    let beresp = Type::Obj(Obj {
+        name: "beresp".into(),
         read_only: true,
-        properties: BTreeMap::from([("ip".to_string(), Type::String)]),
-        ..Obj::default()
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "beresp".into(),
+            Type::String, // Simplified
+            Some("The response received from the backend".to_string()),
+        )),
+        properties: HashMap::from([
+            (
+                "ttl".into(),
+                Type::Obj(Obj {
+                    name: "ttl".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "beresp.ttl".into(),
+                        Type::Duration,
+                        Some("The object's remaining time to live (TTL) from the backend.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "grace".into(),
+                Type::Obj(Obj {
+                    name: "grace".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "beresp.grace".into(),
+                        Type::Duration,
+                        Some("The object's grace period from the backend.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "uncacheable".into(),
+                Type::Obj(Obj {
+                    name: "uncacheable".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "beresp.uncacheable".into(),
+                        Type::Bool,
+                        Some("If true, the object is marked as uncacheable.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "backend".into(),
+                Type::Obj(Obj {
+                    name: "backend".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "beresp.backend".into(),
+                        Type::Backend,
+                        Some("The backend that served this response.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    properties: HashMap::from([
+                        (
+                            "name".into(),
+                            Type::Obj(Obj {
+                                name: "name".into(),
+                                read_only: true,
+                                is_http_headers: false,
+                                definition: Some(Definition::new_builtin(
+                                    "beresp.backend.name".into(),
+                                    Type::String,
+                                    Some("The name of the backend.".to_string()), // Doc from vcl_var.rst
+                                )),
+                                ..Default::default()
+                            }),
+                        ),
+                        (
+                            "ip".into(),
+                            Type::Obj(Obj {
+                                name: "ip".into(),
+                                read_only: true,
+                                is_http_headers: false,
+                                definition: Some(Definition::new_builtin(
+                                    "beresp.backend.ip".into(),
+                                    Type::IP,
+                                    Some("The IP address of the backend.".to_string()), // Doc from vcl_var.rst
+                                )),
+                                ..Default::default()
+                            }),
+                        ),
+                    ])
+                    .into_iter()
+                    .collect(),
+                }),
+            ),
+            // beresp.http.Header
+            ("http".into(), Type::Obj(beresp_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let mut obj_http_headers = Obj {
+        name: "http".into(),
+        is_http_headers: true,
+        properties: Properties::new(),
+        read_only: true,
+        definition: Some(Definition::new_builtin(
+            "obj.http".into(),
+            Type::String, // Simplified
+            Some("HTTP headers of the cached object.".to_string()),
+        )),
+    };
+    for header in DEFAULT_RESPONSE_HEADERS.iter() {
+        obj_http_headers.properties.insert(
+            header.to_string(),
+            Type::Obj(Obj {
+                name: header.to_string(),
+                read_only: true,
+                is_http_headers: false,
+                definition: Some(Definition::new_builtin(
+                    format!("obj.http.{}", header),
+                    Type::String,
+                    None, // Placeholder
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    let obj = Type::Obj(Obj {
+        name: "obj".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "obj".into(),
+            Type::String, // Simplified
+            Some("This is the object we found in cache. It cannot be modified.".to_string()),
+        )),
+        properties: HashMap::from([
+            (
+                "hits".into(),
+                Type::Obj(Obj {
+                    name: "hits".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "obj.hits".into(),
+                        Type::Number,
+                        Some("How many times this object has been delivered.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "ttl".into(),
+                Type::Obj(Obj {
+                    name: "ttl".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "obj.ttl".into(),
+                        Type::Duration,
+                        Some("The object's remaining time to live (TTL) as stored in cache.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "grace".into(),
+                Type::Obj(Obj {
+                    name: "grace".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "obj.grace".into(),
+                        Type::Duration,
+                        Some("The object's grace period as stored in cache.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "keep".into(),
+                Type::Obj(Obj {
+                    name: "keep".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "obj.keep".into(),
+                        Type::Duration,
+                        Some("How long Varnish will attempt to keep the object in cache.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "lastuse".into(), // Not in vcl_var.rst, but common knowledge / older versions
+                Type::Obj(Obj {
+                    name: "lastuse".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "obj.lastuse".into(),
+                        Type::Duration,
+                        Some("Time since the object was last used.".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            // obj.http.Header
+            ("http".into(), Type::Obj(obj_http_headers)),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let sess = Type::Obj(Obj {
+        name: "sess".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "sess".into(),
+            Type::String, // Simplified
+            Some("A session corresponds to the \"conversation\" that Varnish has with a single client connection".to_string()),
+        )),
+        properties: HashMap::from([
+            (
+                "xid".into(),
+                Type::Obj(Obj {
+                    name: "xid".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "sess.xid".into(),
+                        Type::String,
+                        Some("Unique ID of this session.".to_string()), // Doc from vcl_var.rst (VCL >= 4.1)
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "timeout_idle".into(),
+                Type::Obj(Obj {
+                    name: "timeout_idle".into(),
+                    read_only: false,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "sess.timeout_idle".into(),
+                        Type::Duration,
+                        Some("Idle timeout for the session.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let client = Type::Obj(Obj {
+        name: "client".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "client".into(),
+            Type::String, // Simplified
+            Some("These variables describe the network connection between the client and varnishd.".to_string()), // Doc from vcl_var.rst
+        )),
+        properties: HashMap::from([
+            (
+                "ip".into(),
+                Type::Obj(Obj {
+                    name: "ip".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "client.ip".into(),
+                        Type::IP,
+                        Some("The client's IP address.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "identity".into(),
+                Type::Obj(Obj {
+                    name: "identity".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "client.identity".into(),
+                        Type::String,
+                        Some("Client identity if PROXY protocol is used.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let server = Type::Obj(Obj {
+        name: "server".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "server".into(),
+            Type::String, // Simplified
+            Some("These variables describe the network connection on the Varnish server side.".to_string()), // Doc from vcl_var.rst
+        )),
+        properties: HashMap::from([
+            (
+                "ip".into(),
+                Type::Obj(Obj {
+                    name: "ip".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "server.ip".into(),
+                        Type::IP,
+                        Some("The IP address Varnish is listening on for this request.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "hostname".into(),
+                Type::Obj(Obj {
+                    name: "hostname".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "server.hostname".into(),
+                        Type::String,
+                        Some("The hostname of the Varnish server.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+            (
+                "identity".into(),
+                Type::Obj(Obj {
+                    name: "identity".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "server.identity".into(),
+                        Type::String,
+                        Some("The identity of the Varnish server.".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let local = Type::Obj(Obj {
+        name: "local".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "local".into(),
+            Type::String, // Simplified
+            Some("Describes the local end of the TCP connection.".to_string()), // Doc from vcl_var.rst
+        )),
+        properties: HashMap::from([
+            (
+                "ip".into(),
+                Type::Obj(Obj {
+                    name: "ip".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "local.ip".into(),
+                        Type::IP,
+                        Some("The IP address (and port number) of the local end of the TCP connection".to_string()),
+                    )),
+                    ..Default::default()
+                }),
+            ),
+        ])
+        .into_iter()
+        .collect(),
+    });
+
+    let remote = Type::Obj(Obj {
+        name: "remote".into(),
+        read_only: true,
+        is_http_headers: false,
+        definition: Some(Definition::new_builtin(
+            "remote".into(),
+            Type::String, // Simplified
+            Some("Describes the remote end of the TCP connection (client or proxy).".to_string()), // Doc from vcl_var.rst
+        )),
+        properties: HashMap::from([
+            (
+                "ip".into(),
+                Type::Obj(Obj {
+                    name: "ip".into(),
+                    read_only: true,
+                    is_http_headers: false,
+                    definition: Some(Definition::new_builtin(
+                        "remote.ip".into(),
+                        Type::IP,
+                        Some("The IP address of the remote end (client or proxy).".to_string()), // Doc from vcl_var.rst
+                    )),
+                    ..Default::default()
+                }),
+            ),
+        ])
+        .into_iter()
+        .collect(),
     });
 
     let regsub = Type::Func(Func {
-        name: "regsub".to_string(),
+        name: "regsub".into(),
+        r#return: Some(Box::new(Type::String)),
+        doc: Some("Replaces the first occurrence of a regular expression in a string.".to_string()),
         args: vec![
             FuncArg {
-                r#type: Some(Type::String),
                 name: Some("str".into()),
+                r#type: Some(Type::String),
                 ..Default::default()
             },
             FuncArg {
-                r#type: Some(Type::String),
                 name: Some("regex".into()),
+                r#type: Some(Type::String),
                 ..Default::default()
             },
             FuncArg {
-                r#type: Some(Type::String),
                 name: Some("sub".into()),
+                r#type: Some(Type::String),
                 ..Default::default()
             },
         ],
-        r#return: Some(Box::new(Type::String)),
-        ..Func::default()
+        definition: Some(Definition::new_builtin(
+            "regsub".into(),
+            Type::String, // Simplified, this is a function
+            Some("Replaces the first occurrence of a regular expression in a string.".to_string()),
+        )),
+        ..Default::default()
     });
 
     let regsuball = Type::Func(Func {
-        name: "regsuball".to_string(),
+        name: "regsuball".into(),
+        r#return: Some(Box::new(Type::String)),
+        doc: Some("Replaces all occurrences of a regular expression in a string.".to_string()),
         args: vec![
             FuncArg {
                 name: Some("str".into()),
@@ -654,63 +1235,86 @@ pub fn get_varnish_builtins() -> Definitions {
                 ..Default::default()
             },
         ],
-        r#return: Some(Box::new(Type::String)),
-        ..Func::default()
+        definition: Some(Definition::new_builtin(
+            "regsuball".into(),
+            Type::String, // Simplified, this is a function
+            Some("Replaces all occurrences of a regular expression in a string.".to_string()),
+        )),
+        ..Default::default()
     });
 
     let synthetic = Type::Func(Func {
-        name: "synthetic".to_string(),
+        name: "synthetic".into(),
+        doc: Some("Generates a synthetic response.".to_string()),
         args: vec![FuncArg {
             name: Some("str".into()),
             r#type: Some(Type::String),
             ..Default::default()
         }],
-        ..Func::default()
+        definition: Some(Definition::new_builtin(
+            "synthetic".into(),
+            Type::String, // Simplified, this is a function
+            Some("Generates a synthetic response.".to_string()),
+        )),
+        ..Default::default()
     });
 
     let hash_data = Type::Func(Func {
-        name: "hash_data".to_string(),
+        name: "hash_data".into(),
+        doc: Some("Adds data to the hash for object lookup.".to_string()),
         args: vec![FuncArg {
             name: Some("str".into()),
             r#type: Some(Type::String),
             ..Default::default()
         }],
-        ..Func::default()
+        definition: Some(Definition::new_builtin(
+            "hash_data".into(),
+            Type::String, // Simplified, this is a function
+            Some("Adds data to the hash for object lookup.".to_string()),
+        )),
+        ..Default::default()
     });
 
     let ban = Type::Func(Func {
-        name: "ban".to_string(),
+        name: "ban".into(),
+        doc: Some("Adds a ban to the system.".to_string()),
         args: vec![FuncArg {
             name: Some("str".into()),
             r#type: Some(Type::String),
             ..Default::default()
         }],
-        ..Func::default()
+        definition: Some(Definition::new_builtin(
+            "ban".into(),
+            Type::String, // Simplified, this is a function
+            Some("Adds a ban to the system.".to_string()),
+        )),
+        ..Default::default()
     });
 
     let now = Type::Time;
 
     Definitions {
-        #[rustfmt::skip]
-        properties: BTreeMap::from([
-            ("req".into(),       Definition::new_builtin("req".into(),       req      )),
-            ("bereq".into(),     Definition::new_builtin("bereq".into(),     bereq    )),
-            ("req_top".into(),   Definition::new_builtin("req_top".into(),   req_top  )),
-            ("resp".into(),      Definition::new_builtin("resp".into(),      resp     )),
-            ("beresp".into(),    Definition::new_builtin("beresp".into(),    beresp   )),
-            ("obj".into(),       Definition::new_builtin("obj".into(),       obj      )),
-            ("sess".into(),      Definition::new_builtin("sess".into(),      sess     )),
-            ("client".into(),    Definition::new_builtin("client".into(),    client   )),
-            ("server".into(),    Definition::new_builtin("server".into(),    server   )),
-            ("local".into(),     Definition::new_builtin("local".into(),     local    )),
-            ("remote".into(),    Definition::new_builtin("remote".into(),    remote   )),
-            ("regsub".into(),    Definition::new_builtin("regsub".into(),    regsub   )),
-            ("regsuball".into(), Definition::new_builtin("regsuball".into(), regsuball)),
-            ("synthetic".into(), Definition::new_builtin("synthetic".into(), synthetic)),
-            ("hash_data".into(), Definition::new_builtin("hash_data".into(), hash_data)),
-            ("ban".into(),       Definition::new_builtin("ban".into(),       ban)),
-            ("now".into(),       Definition::new_builtin("now".into(),       now)),
-        ]),
+        properties: HashMap::from([
+            ("req".into(),       Definition::new_builtin("req".into(),       req,       Some("These variables describe the present request".to_string()))),
+            ("bereq".into(),     Definition::new_builtin("bereq".into(),     bereq,     Some("This is the request we send to the backend".to_string()))),
+            ("req_top".into(),   Definition::new_builtin("req_top".into(),   req_top,   Some("When ESI:include requests are being processed, req_top points to the request received from the client.".to_string()))),
+            ("resp".into(),      Definition::new_builtin("resp".into(),      resp,      Some("This is the response we send to the client".to_string()))),
+            ("beresp".into(),    Definition::new_builtin("beresp".into(),    beresp,    Some("The response received from the backend".to_string()))),
+            ("obj".into(),       Definition::new_builtin("obj".into(),       obj,       Some("This is the object we found in cache. It cannot be modified.".to_string()))),
+            ("sess".into(),      Definition::new_builtin("sess".into(),      sess,      Some("A session corresponds to the \"conversation\" that Varnish has with a single client connection".to_string()))),
+            ("client".into(),    Definition::new_builtin("client".into(),    client,    Some("These variables describe the network connection between the client and varnishd.".to_string()))),
+            ("server".into(),    Definition::new_builtin("server".into(),    server,    Some("These variables describe the network connection on the Varnish server side.".to_string()))),
+            ("local".into(),     Definition::new_builtin("local".into(),     local,     Some("Describes the local end of the TCP connection.".to_string()))),
+            ("remote".into(),    Definition::new_builtin("remote".into(),    remote,    Some("Describes the remote end of the TCP connection (client or proxy).".to_string()))),
+            ("regsub".into(),    Definition::new_builtin("regsub".into(),    regsub,    Some("Replaces the first occurrence of a regular expression in a string.".to_string()))),
+            ("regsuball".into(), Definition::new_builtin("regsuball".into(), regsuball, Some("Replaces all occurrences of a regular expression in a string.".to_string()))),
+            ("synthetic".into(), Definition::new_builtin("synthetic".into(), synthetic, Some("Generates a synthetic response.".to_string()))),
+            ("hash_data".into(), Definition::new_builtin("hash_data".into(), hash_data, Some("Adds data to the hash for object lookup.".to_string()))),
+            ("ban".into(),       Definition::new_builtin("ban".into(),       ban,       Some("Adds a ban to the system.".to_string()))),
+            ("now".into(),       Definition::new_builtin("now".into(),       now,       Some("The current time.".to_string()))),
+        ])
+        .into_iter()
+        .collect(),
     }
 }
 

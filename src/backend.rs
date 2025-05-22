@@ -857,6 +857,7 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
             r#type: Box::new(vmod_scope),
             loc: Some(import.loc.clone()),
             nested_pos: import.nested_pos.clone(),
+            doc: None, // Added missing doc field
         };
         definitions.properties.insert(vmod_name, def);
     }
@@ -886,6 +887,7 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
                 r#type: Box::new(vmod.scope),
                 loc: Some(import.loc.clone()),
                 nested_pos: import.nested_pos.clone(),
+                doc: None, // Added missing doc field
             };
             definitions.properties.insert(import.name.clone(), def);
         }

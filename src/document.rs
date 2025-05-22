@@ -474,7 +474,7 @@ impl Document {
                         }
 
                         // Hit-for-pass is usually better than no cache at all
-                        if left_parts.get(1) == Some(&"ttl") {
+                        if is_http && left_parts.get(1) == Some(&"ttl") {
                             let right_text = get_node_text(&self.rope, &right_node);
                             if matches!(right_text.as_str(), "0s" | "0") {
                                 add_hint!(
@@ -1126,7 +1126,7 @@ impl Document {
         let mut all_matches = qc.matches(&q, self.ast.root_node(), self);
         let node_capt_idx = q.capture_index_for_name("node").unwrap();
         let ident_capt_idx = q.capture_index_for_name("ident").unwrap();
-        let def_ident_capt_idx = q.capture_index_for_name("def_ident").unwrap();
+        let def_ident_capt_idx = q.capture_index_for_name("def_ident").unwrap_or_default(); // Handle if not present
 
         let mut defs: Vec<Definition> = Vec::new();
         while let Some(each_match) = all_matches.next() {
@@ -1154,18 +1154,22 @@ impl Document {
                     let def_ident_capture = each_match
                         .captures
                         .iter()
-                        .find(|c| c.index == def_ident_capt_idx)
-                        .unwrap();
-                    let def_text = get_node_text(&self.rope, &def_ident_capture.node);
-                    let Some(r#type) = scope_with_vmods
+                        .find(|c| c.index == def_ident_capt_idx);
+                    
+                    let def_text = match def_ident_capture {
+                        Some(capture) => get_node_text(&self.rope, &capture.node),
+                        None => continue, // Or handle error appropriately
+                    };
+
+                    let Some(r#type_from_scope) = scope_with_vmods
                         .get_type_property_by_nested_idents(def_text.split('.').collect())
                     else {
                         continue;
                     };
 
-                    let mut r#type_box = Box::new(r#type.to_owned());
+                    let mut r#type_box = Box::new(r#type_from_scope.to_owned());
 
-                    if let Type::Func(func) = r#type {
+                    if let Type::Func(func) = r#type_from_scope {
                         if let Some(func_return) = func.r#return.clone() {
                             r#type_box = func_return;
                         }
@@ -1183,8 +1187,49 @@ impl Document {
                 ident_str: text.to_string(),
                 r#type,
                 loc: Some(loc),
-                nested_pos,
+                nested_pos: self.pos_from_main_doc.clone(),
+                doc: None,
             });
+        }
+
+        // Process definitions from (probe_declaration ... (ident) @ident)
+        let q_probe = Query::new(
+            &self.ast.language(),
+            r#"(probe_declaration (ident) @ident) @node"#,
+        );
+        if let Ok(q_probe) = q_probe {
+            let mut qc_probe = QueryCursor::new();
+            let mut all_matches_probe = qc_probe.matches(&q_probe, self.ast.root_node(), self);
+            let node_capt_idx_probe = q_probe.capture_index_for_name("node").unwrap();
+            let ident_capt_idx_probe = q_probe.capture_index_for_name("ident").unwrap();
+
+            while let Some(each_match_probe) = all_matches_probe.next() {
+                let node_capture_probe = each_match_probe
+                    .captures
+                    .iter()
+                    .find(|c| c.index == node_capt_idx_probe)
+                    .unwrap();
+                let ident_capture_probe = each_match_probe
+                    .captures
+                    .iter()
+                    .find(|c| c.index == ident_capt_idx_probe)
+                    .unwrap();
+                let text_probe = get_node_text(&self.rope, &ident_capture_probe.node);
+                let loc_probe = Location {
+                    uri: self.url.clone(),
+                    range: ts_range_to_lsp_range(node_capture_probe.node.range()),
+                };
+                let mut nested_pos_probe = self.pos_from_main_doc.clone();
+                nested_pos_probe.push(point_to_tuple(node_capture_probe.node.start_position()));
+
+                defs.push(Definition {
+                    ident_str: text_probe.to_string(),
+                    r#type: Box::new(Type::Probe),
+                    loc: Some(loc_probe),
+                    nested_pos: nested_pos_probe,
+                    doc: None, // Ensure doc field is present
+                });
+            }
         }
 
         defs
@@ -1560,14 +1605,37 @@ impl Document {
                     _ => prop_name.to_string(),
                 }),
                 insert_text_format: Some(InsertTextFormat::SNIPPET),
-                documentation: match property {
-                    Type::Func(func) => func.doc.to_owned().map(|doc| {
-                        Documentation::MarkupContent(MarkupContent {
-                            kind: MarkupKind::Markdown,
-                            value: doc,
-                        })
-                    }),
-                    _ => None,
+                documentation: {
+                    let mut doc_content: Option<String> = None;
+                    match property {
+                        Type::Func(func) => {
+                            doc_content = func.doc.clone();
+                            if doc_content.is_none() {
+                                if let Some(def) = &func.definition {
+                                    doc_content = def.doc.clone();
+                                }
+                            }
+                        }
+                        Type::Obj(obj) => {
+                            if let Some(def) = &obj.definition {
+                                doc_content = def.doc.clone();
+                            }
+                        }
+                        // Handles Type::Sub, Type::Acl, Type::Time, Type::Number, Type::String, 
+                        // Type::Duration, Type::Bool, Type::Backend, Type::Probe, Type::Enum,
+                        // Type::Blob, Type::IP, Type::Body, Type::Bytes.
+                        // These types are typically the `r#type` field of a top-level Definition.
+                        // The documentation lives on that Definition.
+                        _ => {
+                            if let Some(def) = global_scope.get(prop_name) {
+                                doc_content = def.doc.clone();
+                            }
+                        }
+                    }
+                    doc_content.map(|value| Documentation::MarkupContent(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value,
+                    }))
                 },
                 ..Default::default()
             })
@@ -1981,11 +2049,11 @@ sub vcl_recv {
 
         scope.properties.insert(
             "localhost".to_string(),
-            Definition::new_builtin("localhost".to_string(), Type::Backend),
+            Definition::new_builtin("localhost".to_string(), Type::Backend, None),
         );
         scope.properties.insert(
             "localhost_probe".to_string(),
-            Definition::new_builtin("localhost_probe".to_string(), Type::Probe),
+            Definition::new_builtin("localhost_probe".to_string(), Type::Probe, None),
         );
 
         let doc = Document::new(
@@ -2114,27 +2182,30 @@ sub vcl_init {
             properties: BTreeMap::from([(
                 "directors".to_string(),
                 Definition {
-                    ident_str: "directors".to_string(),
-                    r#type: Box::new(Type::Obj(Obj {
-                        name: "mock_directors".to_string(),
-                        properties: BTreeMap::from([(
-                            "round_robin".to_string(),
-                            Type::Func(Func {
-                                r#return: Some(Box::new(Type::Obj(Obj {
-                                    name: "mock_round_robin_director".to_string(),
-                                    properties: BTreeMap::from([(
-                                        "backend".to_string(),
-                                        Type::Func(Default::default()),
-                                    )]),
-                                    ..Default::default()
-                                }))),
-                                ..Default::default()
-                            }),
-                        )]),
-                        ..Default::default()
-                    })),
-                    loc: None,
-                    nested_pos: Default::default(),
+                  ident_str: "directors".to_string(),
+                  r#type: Box::new(Type::Obj(Obj {
+                      name: "mock_directors".to_string(),
+                      is_http_headers: false,
+                      properties: BTreeMap::from([(
+                          "round_robin".to_string(),
+                          Type::Func(Func {
+                              r#return: Some(Box::new(Type::Obj(Obj {
+                                  name: "mock_round_robin_director".to_string(),
+                                  is_http_headers: false,
+                                  properties: BTreeMap::from([(
+                                      "backend".to_string(),
+                                      Type::Func(Default::default()),
+                                  )]),
+                                  ..Default::default()
+                              }))),
+                              ..Default::default()
+                          }),
+                      )]),
+                      ..Default::default()
+                  })),
+                  loc: None,
+                  nested_pos: Default::default(),
+                  doc: None,
                 },
             )]),
             ..Default::default()
@@ -2214,7 +2285,7 @@ backend my_backend {
             Range {
                 start: Position {
                     line: 1,
-                    character: 0,
+                    character:  0,
                 },
                 end: Position {
                     line: 1,
