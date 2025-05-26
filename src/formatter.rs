@@ -7,23 +7,25 @@ use crate::config::FormatterConfig;
 static QUERY_MAIN: &str = include_str!("./formatter_queries/main.scm");
 static QUERY_IFS_LOOSE: &str = include_str!("./formatter_queries/ifs_loose.scm");
 static QUERY_IFS_TIGHT: &str = include_str!("./formatter_queries/ifs_tight.scm");
-// static QUERY_FIX_ELSE_IFS: &str = include_str!("./formatter_queries/else_if.scm");
+static QUERY_AUTOFIX_ELSE_IFS: &str = include_str!("./formatter_queries/autofix_else_if.scm");
 
 pub fn format(
     input: String,
     config: &FormatterConfig,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    if !config.enabled {
+        return Err("Formatting disabled".into());
+    }
+
     let mut query = QUERY_MAIN.to_string();
     let query_large_ifs = match config.format_large_ifs_style {
         crate::config::FormatIfStyle::Loose => QUERY_IFS_LOOSE,
         crate::config::FormatIfStyle::Tight => QUERY_IFS_TIGHT,
     };
     query.push_str(query_large_ifs);
-    /*
-    if config.fix_else_ifs {
-        query.push_str(QUERY_FIX_ELSE_IFS);
+    if config.autofix_else_ifs {
+        query.push_str(QUERY_AUTOFIX_ELSE_IFS);
     }
-    */
 
     let mut output = vec![];
     let mut input_bytes = input.as_bytes();
@@ -52,7 +54,7 @@ pub fn format(
                 "Failed to format. Error: {}",
                 err.source()
                     .map(|source| source.to_string())
-                    .unwrap_or("UNKNOWN".to_string())
+                    .unwrap_or(format!("🤷 ({err:?})"))
             )
             .into(),
         ),
@@ -74,8 +76,8 @@ mod tests {
                     format_large_ifs_style: crate::config::FormatIfStyle::Tight,
                     ..Default::default()
                 },
-                "006_fix_else_if.vcl" => FormatterConfig {
-                    fix_else_ifs: true,
+                "006_autofix_else_if.vcl" => FormatterConfig {
+                    autofix_else_ifs: true,
                     ..Default::default()
                 },
                 _ => FormatterConfig::default(),

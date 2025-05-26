@@ -33,6 +33,7 @@
 
 [
     "else"
+    "elif"
     "elsif"
     "elseif"
 ] @append_space @prepend_space

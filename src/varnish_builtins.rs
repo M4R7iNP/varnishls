@@ -33,6 +33,7 @@ pub enum Type {
     Bytes,
 }
 
+/*
 #[derive(Debug)]
 struct Variable {
     r#type: Type,
@@ -54,11 +55,8 @@ impl HasTypeProperties for Variable {
             .collect()
     }
     fn get_type_property(&self, ident: &str) -> Option<&Type> {
-        let Some(ref properties) = self.properties else {
-            return None;
-        };
-
-        properties
+        self.properties
+            .as_ref()?
             .iter()
             .find(|prop| prop.name == ident)
             .map(|prop| &prop.r#type)
@@ -67,7 +65,9 @@ impl HasTypeProperties for Variable {
         None
     }
 }
+*/
 
+/*
 #[derive(Debug)]
 struct Property {
     r#type: Type,
@@ -89,11 +89,8 @@ impl HasTypeProperties for Property {
             .collect()
     }
     fn get_type_property(&self, ident: &str) -> Option<&Type> {
-        let Some(ref properties) = self.properties else {
-            return None;
-        };
-
-        properties
+        self.properties
+            .as_ref()?
             .iter()
             .find(|prop| prop.name == ident)
             .map(|prop| &prop.r#type)
@@ -102,6 +99,7 @@ impl HasTypeProperties for Property {
         None
     }
 }
+*/
 
 impl Type {
     pub fn is_same_type_as(&self, other: &Self) -> bool {
@@ -214,7 +212,7 @@ impl Definitions {
                     if let Some(ref search_type) = options.search_type {
                         scope_contains_type(property, search_type, true)
                     } else if options.must_be_writable.unwrap_or(false) {
-                        let is_writable = scope.obj().map_or(false, |obj| !obj.read_only);
+                        let is_writable = scope.obj().is_some_and(|obj| !obj.read_only);
                         is_writable || scope_contains_writable(property)
                     } else {
                         // match on everything

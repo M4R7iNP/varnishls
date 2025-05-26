@@ -716,7 +716,7 @@ impl Document {
                             .and_then(|loc| {
                                 loc.uri
                                     .path_segments()
-                                    .and_then(|path_segments| path_segments.last())
+                                    .and_then(|mut path_segments| path_segments.next_back())
                             })
                             .unwrap_or("<UNKNOWN>");
 
@@ -961,34 +961,40 @@ impl Document {
                     }
                 }
                 "rmatch" | "nmatch" => {
-                    // right hand side is the regex
-                    let re_node = node
-                        .parent()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .child_by_field_name("right");
-                    if let Some(re_node) = re_node {
-                        let re_str = get_node_text(&self.rope, &re_node);
-                        match is_regex_safe(re_str) {
-                            Err(SafeRegexError::ParseError) => {
-                                add_error!(node: re_node, "Regex might be invalid");
+                    if config.invalid_regex.is_enabled() {
+                        // right-hand side is the regex
+                        let re_node = node
+                            .parent()
+                            .unwrap()
+                            .parent()
+                            .unwrap()
+                            .child_by_field_name("right");
+                        if let Some(re_node) = re_node {
+                            let re_str = get_node_text(&self.rope, &re_node);
+                            match is_regex_safe(re_str) {
+                                Err(SafeRegexError::ParseError) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: config.invalid_regex.lsp_severity().unwrap(),
+                                        "Regex might be invalid"
+                                    );
+                                }
+                                Err(SafeRegexError::StarHeightError) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: DiagnosticSeverity::WARNING,
+                                        "Regex might be exponentially slow"
+                                    );
+                                }
+                                Err(SafeRegexError::TooManyRepititions) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: DiagnosticSeverity::WARNING,
+                                        "Regex might be slow (too many repititions)"
+                                    );
+                                }
+                                _ => {}
                             }
-                            Err(SafeRegexError::StarHeightError) => {
-                                add_error!(
-                                    node: re_node,
-                                    severity: DiagnosticSeverity::WARNING,
-                                    "Regex might be exponentially slow"
-                                );
-                            }
-                            Err(SafeRegexError::TooManyRepititions) => {
-                                add_error!(
-                                    node: re_node,
-                                    severity: DiagnosticSeverity::WARNING,
-                                    "Regex might be slow (too many repititions)"
-                                );
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -1035,8 +1041,11 @@ impl Document {
         global_scope: Definitions,
         lint_config: &LintConfig,
     ) -> Vec<Diagnostic> {
-        return self
-            .get_error_ranges(&global_scope, lint_config)
+        if !lint_config.enabled {
+            return vec![];
+        }
+
+        self.get_error_ranges(&global_scope, lint_config)
             .iter()
             .map(|lint_error| Diagnostic {
                 range: lint_error.loc.range,
@@ -1048,7 +1057,7 @@ impl Document {
                     .and_then(|data| serde_json::to_value(data).ok()),
                 ..Diagnostic::default()
             })
-            .collect();
+            .collect()
     }
 
     pub fn get_vmod_imports(&self) -> Vec<VmodImport> {

@@ -1,6 +1,6 @@
 use ansi_term::Colour;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use log::debug;
+use log::{debug, error};
 use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -16,9 +16,13 @@ use varnishls::vmod::{read_vmod_lib, read_vmod_lib_by_name};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum LintLevel {
-    Error,   // only errors
-    Warning, // warnings and above
+    /// Only errors
+    Error,
+    /// Warnings and above
+    Warning,
+    /// Info and above
     Info,
+    /// Hints and above (most verbose)
     Hint,
 }
 
@@ -32,6 +36,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start the LSP server
     Lsp {
         /// Debug mode
         #[clap(short, long)]
@@ -44,9 +49,13 @@ enum Command {
         port: Option<u16>,
     },
 
+    /// Lint VCL
+    ///
+    /// Lint the whole workspace by running lint without any file path and having main_vcl set in
+    /// the .varnishls.toml
     Lint {
-        /// File to lint
-        file_path: PathBuf,
+        /// File to lint, unless main_vcl is set in .varnishls.toml
+        file_path: Option<PathBuf>,
         #[clap(long, default_value = "error")]
         level: LintLevel,
         /// Debug mode
@@ -54,6 +63,8 @@ enum Command {
         debug: bool,
     },
 
+    /// Inspect Vmod binary
+    #[clap(hide = true)]
     InspectVmod {
         /// VMOD name
         name: String,
@@ -65,11 +76,15 @@ enum Command {
         json: bool,
     },
 
+    /// Print out parsed data from .vcc files
+    #[clap(hide = true)]
     InspectVcc {
         /// Files to lint
         path: PathBuf,
     },
 
+    /// Run the formatter on VCL files
+    #[clap(alias = "fmt")]
     Format {
         /// Write
         #[clap(short, long)]
@@ -160,15 +175,21 @@ async fn main() -> ExitCode {
             let cwd = std::env::current_dir().unwrap();
             let config = read_config(&cwd).await.unwrap_or_default();
             debug!("config: {config:?}");
+            let Some(initial_file_path) = file_path.or(config.main_vcl.clone()) else {
+                error!("Missing VCL file path to lint. Either setup main_vcl in .varnishls.toml or point cmd arg to your main VCL file.");
+                return ExitCode::from(2);
+            };
+
             let mut root_uri = Url::from_file_path(cwd).unwrap();
             // Fix workspace directory missing slash
             root_uri.set_path(format!("{}/", root_uri.path()).as_str());
             backend.set_root_uri(root_uri).await;
             let initial_include_uri =
-                Url::from_file_path(fs::canonicalize(file_path.clone()).await.unwrap()).unwrap();
+                Url::from_file_path(fs::canonicalize(initial_file_path.clone()).await.unwrap())
+                    .unwrap();
             let initial_include = Include {
                 url: Some(initial_include_uri.clone()),
-                path: file_path,
+                path: initial_file_path,
                 nested_pos: Default::default(),
             };
             backend.set_config(config.clone()).await;
@@ -181,7 +202,6 @@ async fn main() -> ExitCode {
 
             for doc in backend.document_map.iter() {
                 let len_lines = doc.rope.len_lines();
-                // debug!("hei {}", doc.url);
                 let errors = doc.get_error_ranges(&scope, &config.lint);
                 for error in errors {
                     if error.severity <= severity_filter {
@@ -290,11 +310,12 @@ async fn main() -> ExitCode {
                     .write(write)
                     .open(&path)
                     .await
-                    .expect("Could not open VCL file");
+                    .map_err(|err| panic!("Could not open VCL file {path:?}: {err:}"))
+                    .unwrap();
                 let mut src: String = "".into();
                 file.read_to_string(&mut src).await.unwrap();
                 let Ok(formatted) = formatter::format(src, &config.formatter).inspect_err(|err| {
-                    log::error!("Failed to format {}: {err}", &path.to_string_lossy());
+                    error!("Failed to format {}: {err}", &path.to_string_lossy());
                 }) else {
                     continue;
                 };

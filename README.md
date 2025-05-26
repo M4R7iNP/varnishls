@@ -113,6 +113,9 @@ vcl_paths = ["./", "/usr/share/varnish-plus/vcl/"] # paths to directories contai
 prefer_else_if = "hint"
 prefer_lowercase_headers = "hint"
 prefer_custom_headers_without_prefix = false
+[formatter]
+indent_size = 4
+format_large_ifs_style = "loose" # loose or tight
 ```
 
 Allowed levels for linting rules are error, warning, info, and hint. Set to false to disable a rule.

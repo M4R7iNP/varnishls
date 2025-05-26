@@ -6,6 +6,8 @@ use std::fmt;
 use std::path::PathBuf;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 
+const DEFAULT_INDENT_SIZE: u8 = 4;
+
 fn default_vcl_paths() -> Vec<PathBuf> {
     vec!["./".into()]
 }
@@ -78,12 +80,6 @@ impl LintLevel {
     pub fn is_enabled(&self) -> bool {
         !matches!(self, Self::Disabled)
     }
-    fn disabled() -> Self {
-        Self::Disabled
-    }
-    fn hint() -> Self {
-        Self::Hint
-    }
     pub fn lsp_severity(&self) -> Option<DiagnosticSeverity> {
         match self {
             LintLevel::Disabled => None,
@@ -140,50 +136,54 @@ impl<'de> de::Deserialize<'de> for LintLevel {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct LintConfig {
-    #[serde(default = "LintLevel::disabled")]
+    pub enabled: bool,
     pub no_rewrite_req_url: LintLevel,
-    #[serde(default = "LintLevel::hint")]
     pub prefer_else_if: LintLevel,
-    #[serde(default = "LintLevel::hint")]
     pub prefer_lowercase_headers: LintLevel,
-    #[serde(default = "LintLevel::disabled")]
     pub prefer_custom_headers_without_prefix: LintLevel,
+    pub invalid_regex: LintLevel,
 }
 
 impl Default for LintConfig {
     fn default() -> Self {
         LintConfig {
+            enabled: true,
             no_rewrite_req_url: LintLevel::Disabled,
             prefer_else_if: LintLevel::Hint,
             prefer_lowercase_headers: LintLevel::Hint,
             prefer_custom_headers_without_prefix: LintLevel::Disabled,
+            invalid_regex: LintLevel::Error,
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default, Copy)]
+#[derive(Clone, Debug, Deserialize, Serialize, Copy)]
+#[serde(default)]
 pub struct FormatterConfig {
-    #[serde(default)]
+    pub enabled: bool,
     pub indent_size: IndentSize,
-    #[serde(default)]
     pub format_large_ifs_style: FormatIfStyle,
-    #[serde(default)]
-    pub fix_else_ifs: bool,
+    pub autofix_else_ifs: bool,
+}
+
+impl Default for FormatterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            indent_size: IndentSize::Number(DEFAULT_INDENT_SIZE),
+            format_large_ifs_style: FormatIfStyle::Loose,
+            autofix_else_ifs: true,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 #[serde(untagged)]
 pub enum IndentSize {
     Number(u8),
-    // TODO: FIXME:
     Tab,
-}
-
-impl Default for IndentSize {
-    fn default() -> Self {
-        IndentSize::Number(4)
-    }
 }
 
 #[allow(clippy::to_string_trait_impl)]
@@ -201,12 +201,6 @@ impl ToString for IndentSize {
 pub enum FormatIfStyle {
     Tight,
     Loose,
-}
-
-impl Default for FormatIfStyle {
-    fn default() -> Self {
-        Self::Loose // Default in C code style guides
-    }
 }
 
 #[cfg(test)]
