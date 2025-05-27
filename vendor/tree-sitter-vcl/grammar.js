@@ -178,8 +178,8 @@ module.exports = grammar({
         'new',
         optional(
           seq(
-            optional(seq('=', optional(field('def_right', $.ident_call_expr)))),
             field('ident', $.ident),
+            optional(seq('=', optional(field('def_right', $.ident_call_expr)))),
           ),
         ),
       ),
