@@ -144,6 +144,7 @@ pub struct LintConfig {
     pub prefer_lowercase_headers: LintLevel,
     pub prefer_custom_headers_without_prefix: LintLevel,
     pub invalid_regex: LintLevel,
+    pub slow_regex: LintLevel,
 }
 
 impl Default for LintConfig {
@@ -155,6 +156,7 @@ impl Default for LintConfig {
             prefer_lowercase_headers: LintLevel::Hint,
             prefer_custom_headers_without_prefix: LintLevel::Disabled,
             invalid_regex: LintLevel::Error,
+            slow_regex: LintLevel::Warning,
         }
     }
 }
