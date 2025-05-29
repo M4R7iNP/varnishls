@@ -13,6 +13,7 @@ use tree_sitter::Point;
 
 use crate::config::Config;
 use crate::document::{DiagnosticData, Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
+use crate::formatter;
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -179,7 +180,7 @@ impl Backend {
                     if doc.pos_from_main_doc != include.nested_pos {
                         drop(doc);
                         let mut doc = self.document_map.get_mut(&include_url).unwrap();
-                        doc.pos_from_main_doc = include.nested_pos.clone();
+                        doc.pos_from_main_doc.clone_from(&include.nested_pos);
                         // ... do the same for nested includes
                         includes_to_process.append(&mut doc.get_includes().into());
                         drop(doc);
@@ -288,6 +289,7 @@ unsafe impl Sync for Backend {}
 impl LanguageServer for Backend {
     async fn initialize(&self, init_params: InitializeParams) -> Result<InitializeResult> {
         let root_uri = init_params.root_uri;
+        debug!("initial root_uri: {root_uri:?}");
         // TODO: consider not initializing if uri scheme is not file
 
         if let Some(mut root_uri) = root_uri {
@@ -301,6 +303,7 @@ impl LanguageServer for Backend {
                     .await;
                 let config = self.config.read().await;
                 if let Some(ref main_vcl_path) = config.main_vcl {
+                    debug!("main_vcl_path: {main_vcl_path:?}");
                     if let Some(main_vcl_url) = self.read_doc_from_path(main_vcl_path, vec![]).await
                     {
                         *self.root_document_uri.write().await = Some(main_vcl_url.clone());
@@ -381,6 +384,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -544,7 +548,7 @@ impl LanguageServer for Backend {
             column: position.character as usize,
         };
 
-        let ident = doc.get_ident_at_point(point).ok_or(Error {
+        let ident = doc.get_ident_at_point_full(point).ok_or(Error {
             code: tower_lsp::jsonrpc::ErrorCode::InternalError,
             message: "Could not find ident".into(),
             data: None,
@@ -755,6 +759,35 @@ impl LanguageServer for Backend {
         }
 
         Ok(Some(actions))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let Some(doc) = self.document_map.get(&uri) else {
+            error!("Could not find document");
+            return Err(Error::internal_error());
+        };
+        let doc_len_lines = doc.rope.len_lines();
+        let doc_last_line_len = doc.rope.line(doc_len_lines - 1).len_utf16_cu();
+        let src = doc.rope.to_string();
+        let config = self.config.read().await;
+        let result = formatter::format(src, &config.formatter).map_err(|err| {
+            error!("Failed to format: {err}");
+            Error::internal_error()
+        })?;
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: doc_len_lines as u32,
+                    character: doc_last_line_len as u32,
+                },
+            },
+            new_text: result,
+        }]))
     }
 }
 

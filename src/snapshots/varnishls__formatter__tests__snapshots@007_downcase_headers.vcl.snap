@@ -1,0 +1,14 @@
+---
+source: src/formatter.rs
+expression: "format(input, &config).unwrap()"
+input_file: src/formatter_tests/007_downcase_headers.vcl
+---
+sub vcl_deliver {
+    unset resp.http.access-control-allow-origin;
+    set resp.http.age = 0;
+    if (req.http.x-forwarded-for != "::1") {
+        set resp.http.vary = resp.http.vary + ", origin";
+        set resp.http.x-powered-by = "Varnish :)";
+        set resp.http.via = "Varnish :)";
+    }
+}

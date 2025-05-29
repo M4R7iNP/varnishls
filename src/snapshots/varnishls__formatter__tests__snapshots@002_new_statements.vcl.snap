@@ -1,0 +1,13 @@
+---
+source: src/formatter.rs
+expression: "format(input, &config)"
+input_file: src/formatter_tests/002_new_statements.vcl
+---
+import brotli;
+import goto;
+
+sub vcl_init {
+    new api = directors.round_robin();
+    new frontends = directors.round_robin();
+    brotli.init();
+}

@@ -38,6 +38,7 @@
 (operator) @operator
 "=" @operator
 "!" @operator
+"." @operator
 ; [ "(" ")" ";"] @delimiter
 
 
@@ -58,10 +59,10 @@
 
 
 (ident_call_expr
-  ident: (nested_ident) @function)
+  ident: [(nested_ident) (ident)] @function)
 
 (ident_call_expr
-  ident: (ident) @function.defaultLibrary (#match? @function.defaultLibrary "^regsub|regsuball|hash_data|synthetic|ban$"))
+  ident: (ident) @function.defaultLibrary (#match? @function.defaultLibrary "^(regsub|regsuball|hash_data|synthetic|ban)$"))
 
 (func_call_named_arg
    arg_name: (ident) @parameter)
