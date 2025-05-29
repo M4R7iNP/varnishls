@@ -8,6 +8,7 @@ static QUERY_MAIN: &str = include_str!("./formatter_queries/main.scm");
 static QUERY_IFS_LOOSE: &str = include_str!("./formatter_queries/ifs_loose.scm");
 static QUERY_IFS_TIGHT: &str = include_str!("./formatter_queries/ifs_tight.scm");
 static QUERY_AUTOFIX_ELSE_IFS: &str = include_str!("./formatter_queries/autofix_else_if.scm");
+static QUERY_DOWNCASE_HEADERS: &str = include_str!("./formatter_queries/downcase_headers.scm");
 
 pub fn format(
     input: String,
@@ -26,15 +27,18 @@ pub fn format(
     if config.autofix_else_ifs {
         query.push_str(QUERY_AUTOFIX_ELSE_IFS);
     }
+    if config.downcase_headers {
+        query.push_str(QUERY_DOWNCASE_HEADERS);
+    }
 
     let mut output = vec![];
     let mut input_bytes = input.as_bytes();
 
-    let vcl_gammar = tree_sitter_vcl::LANGUAGE;
+    let ts_grammar = tree_sitter_vcl::LANGUAGE;
     let language = Language {
         name: "vcl".to_owned(),
-        query: TopiaryQuery::new(&vcl_gammar.into(), &query).unwrap(),
-        grammar: vcl_gammar.into(),
+        query: TopiaryQuery::new(&ts_grammar.into(), &query).unwrap(),
+        grammar: ts_grammar.into(),
         indent: Some(config.indent_size.to_string()),
     };
 

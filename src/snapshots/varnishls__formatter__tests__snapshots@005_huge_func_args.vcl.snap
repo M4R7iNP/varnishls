@@ -1,17 +1,17 @@
 ---
 source: src/formatter.rs
-expression: "format(input, &config)"
+expression: "format(input, &config).unwrap()"
 input_file: src/formatter_tests/005_huge_func_args.vcl
 ---
 sub set_cookie {
     header.append(
-        beresp.http.Set-Cookie,
+        beresp.http.set-cookie,
         "my_cookie=" +
-            bereq.http.X-MY-COOKIE +
+            bereq.http.x-my-cookie +
             "; domain=" +
             bereq.http.host +
             ";max-age=" +
-            bereq.http.X-MYCOOKIE-Age +
+            bereq.http.x-mycookie-age +
             "; path=/"
     )
 }

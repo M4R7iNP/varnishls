@@ -168,6 +168,7 @@ pub struct FormatterConfig {
     pub indent_size: IndentSize,
     pub format_large_ifs_style: FormatIfStyle,
     pub autofix_else_ifs: bool,
+    pub downcase_headers: bool,
 }
 
 impl Default for FormatterConfig {
@@ -177,6 +178,7 @@ impl Default for FormatterConfig {
             indent_size: IndentSize::Number(DEFAULT_INDENT_SIZE),
             format_large_ifs_style: FormatIfStyle::Loose,
             autofix_else_ifs: true,
+            downcase_headers: true,
         }
     }
 }

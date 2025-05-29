@@ -13,6 +13,7 @@ use tree_sitter::Point;
 
 use crate::config::Config;
 use crate::document::{DiagnosticData, Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
+use crate::formatter;
 use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
@@ -770,25 +771,23 @@ impl LanguageServer for Backend {
         let doc_last_line_len = doc.rope.line(doc_len_lines - 1).len_utf16_cu();
         let src = doc.rope.to_string();
         let config = self.config.read().await;
-        match crate::formatter::format(src, &config.formatter) {
-            Ok(result) => Ok(Some(vec![TextEdit {
-                range: Range {
-                    start: Position {
-                        line: 0,
-                        character: 0,
-                    },
-                    end: Position {
-                        line: doc_len_lines as u32,
-                        character: doc_last_line_len as u32,
-                    },
+        let result = formatter::format(src, &config.formatter).map_err(|err| {
+            error!("Failed to format: {err}");
+            Error::internal_error()
+        })?;
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
                 },
-                new_text: result,
-            }])),
-            Err(err) => {
-                error!("Failed to format: {err}");
-                Err(Error::internal_error())
-            }
-        }
+                end: Position {
+                    line: doc_len_lines as u32,
+                    character: doc_last_line_len as u32,
+                },
+            },
+            new_text: result,
+        }]))
     }
 }
 
