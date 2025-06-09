@@ -1,0 +1,16 @@
+---
+source: src/formatter.rs
+expression: "format(input, &config)"
+input_file: src/formatter_tests/001_basic.vcl
+---
+#  vim: tabstop=4 shiftwidth=4 expandtab:
+vcl 4.0;
+
+include "hello.vcl"; // jasså?
+include "hei.vcl";
+
+sub vcl_recv {
+    if (req.url == "lol") {
+        set req.url = "heisann!";
+    }
+}

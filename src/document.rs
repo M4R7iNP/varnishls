@@ -74,7 +74,7 @@ pub enum LintErrorInternalType {
 #[derive(Debug)]
 pub struct LintError {
     pub message: String,
-    pub severity: DiagnosticSeverity,
+    pub severity: Option<DiagnosticSeverity>,
     pub loc: Location,
     pub data: Option<DiagnosticData>,
 }
@@ -303,6 +303,16 @@ impl Document {
         Some(name)
     }
 
+    /// get identifier at point
+    pub fn get_ident_at_point_full(&self, point: Point) -> Option<String> {
+        let node = self
+            .ast
+            .root_node()
+            .descendant_for_point_range(point, point)?;
+        let name = get_node_text(&self.rope, &node);
+        Some(name)
+    }
+
     pub fn get_definition_by_name(&self, name: &str) -> Option<(Point, Point)> {
         let name_escaped = name.replace('"', "\\\"");
         let q = Query::new(
@@ -381,27 +391,30 @@ impl Document {
 
             macro_rules! add_error {
                 (node: $node:expr, severity: $severity:expr, $($arg:tt)+) => {
-                    error_ranges.push(LintError {
-                        message: format!($($arg)+),
-                        loc: get_location!(node: $node),
-                        severity: $severity,
-                        data: None,
-                    });
+                    let severity = $severity;
+                    if (severity.is_some()) {
+                        error_ranges.push(LintError {
+                            message: format!($($arg)+),
+                            loc: get_location!(node: $node),
+                            severity,
+                            data: None,
+                        });
+                    }
                 };
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: $node, severity: Some(DiagnosticSeverity::ERROR), $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::ERROR, $($arg)+);
+                    add_error!(node: node, severity: Some(DiagnosticSeverity::ERROR), $($arg)+);
                 }
             }
 
             macro_rules! add_hint {
                 (node: $node:expr, $($arg:tt)+) => {
-                    add_error!(node: $node, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: $node, severity: Some(DiagnosticSeverity::HINT), $($arg)+);
                 };
                 ($($arg:tt)+) => {
-                    add_error!(node: node, severity: DiagnosticSeverity::HINT, $($arg)+);
+                    add_error!(node: node, severity: Some(DiagnosticSeverity::HINT), $($arg)+);
                 }
             }
 
@@ -509,7 +522,7 @@ impl Document {
                                     if sub_name == "vcl_recv" {
                                         add_error!(
                                             node: node,
-                                            severity: config.no_rewrite_req_url.lsp_severity().unwrap(),
+                                            severity: config.no_rewrite_req_url.lsp_severity(),
                                             "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a consious decision whether to edit the cache key or just the backend url."
                                         );
                                     }
@@ -527,7 +540,7 @@ impl Document {
                             error_ranges.push(LintError {
                                 message: "Prefer lowercase headers".into(),
                                 loc: get_location!(node: left_node),
-                                severity: config.prefer_lowercase_headers.lsp_severity().unwrap(),
+                                severity: config.prefer_lowercase_headers.lsp_severity(),
                                 data: Some(DiagnosticData {
                                     r#type: LintErrorInternalType::PreferLowercaseHeader,
                                     quickfix_label: "Downcase".into(),
@@ -543,7 +556,7 @@ impl Document {
                                 if hdr.starts_with("x-") && !hdr.starts_with("x-forwarded-") {
                                     add_error!(
                                         node: node,
-                                        severity: config.prefer_custom_headers_without_prefix.lsp_severity().unwrap(),
+                                        severity: config.prefer_custom_headers_without_prefix.lsp_severity(),
                                         "Prefer custom headers without the «X-»-prefix"
                                     );
                                 }
@@ -573,14 +586,6 @@ impl Document {
                         Some(ref left_node) => get_node_text(&self.rope, left_node),
                     };
 
-                    let parent_parent_node_kind = node.parent().unwrap().kind();
-                    let map = match parent_parent_node_kind {
-                        "probe_declaration" | "inline_probe" => get_probe_field_types(),
-                        _ => get_backend_field_types(),
-                    };
-
-                    let r#type = map.get(left_ident.as_str());
-
                     let Some(right_node) = node.child_by_field_name("right") else {
                         add_error!("Missing backend property value");
                         continue;
@@ -591,37 +596,40 @@ impl Document {
                         add_error!("Property {left_ident} cannot contain string list");
                     }
 
-                    match r#type {
-                        None => {
-                            add_error!("Backend property «{}» does not exist", left_ident);
-                        }
-                        Some(r#type) => {
-                            if right_node.kind() == "ident" {
-                                let right_ident = get_node_text(&self.rope, &right_node);
-                                let Some(ident_type) = global_scope.get_type_property(&right_ident)
-                                else {
-                                    add_error!(node: right_node, "Undefined value");
-                                    continue;
-                                };
-                                if !ident_type.can_this_cast_into(r#type) {
-                                    add_error!(
-                                        node: right_node,
-                                        "Expected {}, found {}",
-                                        r#type,
-                                        ident_type
-                                    );
-                                }
-                                continue;
-                            }
+                    let parent_parent_node_kind = node.parent().unwrap().kind();
+                    let map = match parent_parent_node_kind {
+                        "probe_declaration" | "inline_probe" => get_probe_field_types(),
+                        _ => get_backend_field_types(),
+                    };
 
-                            let Some(right_node_type) = node_to_type(&right_node) else {
-                                add_error!("Unexpected value"); // unrecognized type
-                                continue;
-                            };
-                            if !right_node_type.can_this_cast_into(r#type) {
-                                add_error!("Expected {}, found {}", r#type, right_node_type);
-                            }
+                    let Some(r#type) = map.get(left_ident.as_str()) else {
+                        add_error!("Backend property «{}» does not exist", left_ident);
+                        continue;
+                    };
+
+                    if right_node.kind() == "ident" {
+                        let right_ident = get_node_text(&self.rope, &right_node);
+                        let Some(ident_type) = global_scope.get_type_property(&right_ident) else {
+                            add_error!(node: right_node, "Undefined value");
+                            continue;
+                        };
+                        if !ident_type.can_this_cast_into(r#type) {
+                            add_error!(
+                                node: right_node,
+                                "Expected {}, found {}",
+                                r#type,
+                                ident_type
+                            );
                         }
+                        continue;
+                    }
+
+                    let Some(right_node_type) = node_to_type(&right_node) else {
+                        add_error!("Unexpected value"); // unrecognized type
+                        continue;
+                    };
+                    if !right_node_type.can_this_cast_into(r#type) {
+                        add_error!("Expected {}, found {}", r#type, right_node_type);
                     }
                 }
                 "elsif_stmt" => {
@@ -635,7 +643,7 @@ impl Document {
                         error_ranges.push(LintError {
                             message: "Prefer «else if»".into(),
                             loc: get_location!(node: keyword_node),
-                            severity: config.prefer_else_if.lsp_severity().unwrap(),
+                            severity: config.prefer_else_if.lsp_severity(),
                             data: Some(DiagnosticData {
                                 r#type: LintErrorInternalType::PreferElseIf,
                                 quickfix_label: format!(
@@ -706,7 +714,7 @@ impl Document {
                             .and_then(|loc| {
                                 loc.uri
                                     .path_segments()
-                                    .and_then(|path_segments| path_segments.last())
+                                    .and_then(|mut path_segments| path_segments.next_back())
                             })
                             .unwrap_or("<UNKNOWN>");
 
@@ -748,7 +756,7 @@ impl Document {
                             message.push(' ');
                             message.push_str(missing_arg_name);
                         }
-                        add_error!("{}", message);
+                        add_error!("{message}");
                     }
 
                     // check the arguments exists and that their provided type is correct
@@ -951,34 +959,40 @@ impl Document {
                     }
                 }
                 "rmatch" | "nmatch" => {
-                    // right hand side is the regex
-                    let re_node = node
-                        .parent()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .child_by_field_name("right");
-                    if let Some(re_node) = re_node {
-                        let re_str = get_node_text(&self.rope, &re_node);
-                        match is_regex_safe(re_str) {
-                            Err(SafeRegexError::ParseError) => {
-                                add_error!(node: re_node, "Regex might be invalid");
+                    if config.invalid_regex.is_enabled() {
+                        // right-hand side is the regex
+                        let re_node = node
+                            .parent()
+                            .unwrap()
+                            .parent()
+                            .unwrap()
+                            .child_by_field_name("right");
+                        if let Some(re_node) = re_node {
+                            let re_str = get_node_text(&self.rope, &re_node);
+                            match is_regex_safe(re_str) {
+                                Err(SafeRegexError::ParseError) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: config.invalid_regex.lsp_severity(),
+                                        "Regex might be invalid"
+                                    );
+                                }
+                                Err(SafeRegexError::StarHeightError) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: config.slow_regex.lsp_severity(),
+                                        "Regex might be exponentially slow"
+                                    );
+                                }
+                                Err(SafeRegexError::TooManyRepititions) => {
+                                    add_error!(
+                                        node: re_node,
+                                        severity: config.slow_regex.lsp_severity(),
+                                        "Regex might be slow (too many repititions)"
+                                    );
+                                }
+                                _ => {}
                             }
-                            Err(SafeRegexError::StarHeightError) => {
-                                add_error!(
-                                    node: re_node,
-                                    severity: DiagnosticSeverity::WARNING,
-                                    "Regex might be exponentially slow"
-                                );
-                            }
-                            Err(SafeRegexError::TooManyRepititions) => {
-                                add_error!(
-                                    node: re_node,
-                                    severity: DiagnosticSeverity::WARNING,
-                                    "Regex might be slow (too many repititions)"
-                                );
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -988,6 +1002,29 @@ impl Document {
                         varnishls_ignore = Some(VarnishlsIgnore {
                             line: node.end_position().row + 1,
                         });
+                    }
+                }
+                "vtc_statement" | "vtc_block_statement" => {
+                    let start_line_idx = node.start_position().row;
+                    let end_line_idx = node.end_position().row;
+                    if start_line_idx != end_line_idx {
+                        // make sure newlines are escaped (except in blocks)
+                        let text = self.rope.byte_slice(node.byte_range()).to_string();
+                        let chars = text.chars();
+                        let mut block_depth = 0;
+                        let mut prev_char = '\0';
+                        for (idx, char) in chars.enumerate() {
+                            if char == '{' {
+                                block_depth += 1;
+                            }
+                            if char == '}' {
+                                block_depth -= 1;
+                            }
+                            if block_depth == 0 && idx > 0 && char == '\n' && prev_char != '\\' {
+                                add_error!("Unescaped newline");
+                            }
+                            prev_char = char;
+                        }
                     }
                 }
                 _ => {}
@@ -1002,12 +1039,15 @@ impl Document {
         global_scope: Definitions,
         lint_config: &LintConfig,
     ) -> Vec<Diagnostic> {
-        return self
-            .get_error_ranges(&global_scope, lint_config)
+        if !lint_config.enabled {
+            return vec![];
+        }
+
+        self.get_error_ranges(&global_scope, lint_config)
             .iter()
             .map(|lint_error| Diagnostic {
                 range: lint_error.loc.range,
-                severity: Some(lint_error.severity),
+                severity: lint_error.severity,
                 message: lint_error.message.to_owned(),
                 data: lint_error
                     .data
@@ -1015,7 +1055,7 @@ impl Document {
                     .and_then(|data| serde_json::to_value(data).ok()),
                 ..Diagnostic::default()
             })
-            .collect();
+            .collect()
     }
 
     pub fn get_vmod_imports(&self) -> Vec<VmodImport> {
