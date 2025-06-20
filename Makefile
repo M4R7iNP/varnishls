@@ -15,10 +15,10 @@ clean:
 	cargo clean
 
 tree-sitter-vcl:
-	cd vendor/tree-sitter-vcl && npm ci && npm run build
+	cd vendor/tree-sitter-vcl && npm ci && npm run build && tree-sitter test
 
 tree-sitter-vtc:
-	cd vendor/tree-sitter-vtc && npm ci && npm run build
+	cd vendor/tree-sitter-vtc && npm ci && npm run build && tree-sitter test
 
 build:
 	cargo build

@@ -14,7 +14,18 @@ module.exports = grammar({
   extras: $ => [/\s+/, $.COMMENT, $.inline_c],
   inline: $ => [$.expr, $.inline_c],
 
-  precedences: () => [['member', 'call']],
+  precedences: () => [
+    [
+      'member',
+      'call',
+      'binary_times',
+      'binary_plus',
+      'binary_relation',
+      'binary_equality',
+      'logical_and',
+      'logical_or',
+    ],
+  ],
 
   rules: {
     source_file: $ => repeat($.toplev_declaration),
@@ -203,7 +214,7 @@ module.exports = grammar({
       choice(
         $.literal,
         $.ident_call_expr,
-        prec('member', $.nested_ident),
+        $.nested_ident, 
         $.parenthesized_expression,
         $.binary_expression,
         $.neg_expr,
@@ -212,14 +223,31 @@ module.exports = grammar({
     parenthesized_expression: $ => seq('(', $.expr, ')'),
 
     binary_expression: $ =>
-      prec.left(
-        seq(
-          field('left', $.expr),
-          field('operator', $.operator),
-          field('right', $.expr),
+      choice(
+        ...[
+          ['&&', 'logical_and'],
+          ['||', 'logical_or'],
+          ['+', 'binary_plus'],
+          ['-', 'binary_plus'],
+          ['*', 'binary_times'],
+          ['/', 'binary_times'],
+          ['<', 'binary_relation'],
+          ['<=', 'binary_relation'],
+          ['==', 'binary_equality'],
+          ['!=', 'binary_equality'],
+          ['>=', 'binary_relation'],
+          ['>', 'binary_relation'],
+        ].map(([operator, precedence]) =>
+          prec.left(
+            precedence,
+            seq(
+              field('left', choice($.expr)), 
+              field('operator', operator),
+              field('right', choice($.expr)),
+            ),
+          ),
         ),
       ),
-
     neg_expr: $ => prec.left(seq('!', $.expr)),
 
     bool: () => choice('true', 'false'),

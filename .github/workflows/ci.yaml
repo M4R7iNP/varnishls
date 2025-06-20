@@ -26,11 +26,21 @@ jobs:
           npm ci
           npx tree-sitter generate
 
+      - name: Test tree-sitter-vcl
+        working-directory: ./vendor/tree-sitter-vcl
+        run: |
+          npx tree-sitter test
+
       - name: Generate tree-sitter-vtc
         working-directory: ./vendor/tree-sitter-vtc
         run: |
           npm ci
           npx tree-sitter generate
+
+      - name: Test tree-sitter-vtc
+        working-directory: ./vendor/tree-sitter-vtc
+        run: |
+          npx tree-sitter test
 
       - uses: dtolnay/rust-toolchain@stable
         with:
