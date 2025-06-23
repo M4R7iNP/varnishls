@@ -2,21 +2,21 @@
 name = "varnishls"
 version = "0.1.0"
 license = "LGPL-3.0-or-later"
-edition = "2021"
+edition = "2024"
 authors = ["martin@m4r7.in"]
 keywords = ["lsp", "language-server", "varnish"]
 categories = ["development-tools"]
 description = "Varnish language server"
 
 [dependencies]
-goblin = "0.8"
+goblin = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ropey = "1.6"
 tokio = { version = "1.17.0", features = ["full"] }
 tower-lsp = { version = "0.20", features = ["proposed"] }
 dashmap = { version = "5.5.3", features = ["inline"] }
-tree-sitter = "0.24"
+tree-sitter = "0.25"
 tree-sitter-vcl = { path = "vendor/tree-sitter-vcl" }
 tree-sitter-vtc = { path = "vendor/tree-sitter-vtc" }
 simplelog = "0.12.1"
@@ -26,7 +26,7 @@ toml = "0.8"
 regex-syntax = { version = "0.8", features = ["std"], default-features = false }
 ansi_term = "0.12.1"
 streaming-iterator = { version = "0.1.9", features = ["std"] }
-topiary-core = "0.6"
+topiary-core = "0.6.1"
 # topiary-core = { git = "https://github.com/tweag/topiary", rev = "932cb223cf0eb73d536cec03ccb74b7b6a105294" }
 
 [build-dependencies]

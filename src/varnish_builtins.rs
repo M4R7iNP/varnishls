@@ -180,7 +180,7 @@ impl Definitions {
             unreachable!("Failed to split identifier by period");
         };
         for ident in idents {
-            let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
+            let Some(Type::Obj(obj)) = scope.get_type_property(ident) else {
                 return None;
             };
             scope = obj;
@@ -198,7 +198,7 @@ impl Definitions {
             unreachable!("Failed to split identifier by period");
         };
         for ident in idents {
-            let Some(Type::Obj(ref obj)) = scope.get_type_property(ident) else {
+            let Some(Type::Obj(obj)) = scope.get_type_property(ident) else {
                 return None;
             };
             scope = obj;

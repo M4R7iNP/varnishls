@@ -236,12 +236,13 @@ impl Document {
             .parser
             .lock()
             .unwrap()
-            .parse_with(
+            .parse_with_options(
                 &mut |offset, _pos| {
                     let (chunk, chunk_byte_idx, _, _) = self.rope.chunk_at_byte(offset);
                     &chunk.as_bytes()[(offset - chunk_byte_idx)..]
                 },
                 Some(&new_ast),
+                None,
             )
             .unwrap();
 
