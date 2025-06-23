@@ -1,9 +1,9 @@
 (COMMENT) @comment
 (binary_expression
-  operator: (operator (rmatch))
+  operator: "~"
   right: (literal (string) @regex (#offset! @regex 0 1 0 -1)))
 (binary_expression
-  operator: (operator (nmatch))
+  operator: "!~"
   right: (literal (string) @regex (#offset! @regex 0 1 0 -1)))
 ((inline_c) @c (#offset! @c 0 2 0 -2))
 (ident_call_expr

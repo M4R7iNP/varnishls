@@ -55,7 +55,7 @@
     (COMMENT)
 ] @allow_blank_line_before
 
-(binary_expression (operator [(or) (and)]) @append_empty_softline) (#scope_id! "tuple")
+(binary_expression operator: ["||" "&&"] @append_empty_softline) (#scope_id! "tuple")
 
 (func_call_args
   "(" @append_begin_scope @append_empty_softline @append_indent_start
@@ -66,13 +66,13 @@
 (func_call_args "," @append_empty_softline) (#scope_id! "tuple")
 
 (binary_expression
-    operator: (operator [(add) (multiply)]) @append_indent_start
+    operator: ["+" "-" "*" "/"] @append_indent_start
     right: (_) @append_indent_end
     (#scope_id! "big_maths")
 )
-(binary_expression operator: (operator [(add) (multiply)]) @append_empty_softline) (#scope_id! "big_maths")
+(binary_expression operator: ["+" "-" "*" "/"] @append_empty_softline) (#scope_id! "big_maths")
 
-(operator) @prepend_space @append_space
+(binary_expression operator: _ @prepend_space @append_space)
 
 (COMMENT) @append_hardline @prepend_input_softline @multi_line_indent_all
 (inline_c) @append_hardline @multi_line_indent_all @allow_blank_line_before

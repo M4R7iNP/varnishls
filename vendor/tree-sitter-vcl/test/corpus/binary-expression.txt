@@ -9,58 +9,56 @@ sub vcl_recv {
 
 ---
 
-    (source_file
-      (toplev_declaration
-        (sub_declaration
-          (ident)
-          (block
-            (stmt
-              (if_stmt
-                (parenthesized_expression
-                  (binary_expression
-                    (binary_expression
-                      (literal
-                        (number))
-                      (literal
-                        (number)))
-                    (binary_expression
-                      (literal
-                        (number))
-                      (literal
-                        (number)))))
-                (block)))))))
-
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))))
+            (block)))))))
 
 ==================
 Binary expression precidence with real world exaple
 ==================
 
 sub vcl_recv {
-    if (req.http.method == "GET" && req.http.url == "/api") {
+    if (req.http.method == "GET" && req.http.url ~ "/api") {
     }
 }
 
 ---
 
-    (source_file
-      (toplev_declaration
-        (sub_declaration
-          (ident)
-          (block
-            (stmt
-              (if_stmt
-                (parenthesized_expression
-                  (binary_expression
-                    (binary_expression
-                      (nested_ident)
-                      (literal
-                        (string)))
-                    (binary_expression
-                      (nested_ident)
-                      (literal
-                        (string)))))  
-                (block)))))))
-
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
+                (binary_expression
+                  (nested_ident)
+                  (literal
+                    (string)))
+                (binary_expression
+                  (nested_ident)
+                  (literal
+                    (string)))))
+            (block)))))))
 
 ==================
 Binary expression precidence complex
@@ -73,28 +71,28 @@ sub vcl_recv {
 
 ---
 
- (source_file
-      (toplev_declaration
-        (sub_declaration
-          (ident)
-          (block
-            (stmt
-              (if_stmt
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
                 (parenthesized_expression
                   (binary_expression
-                    (parenthesized_expression
-                      (binary_expression
-                        (binary_expression
-                          (nested_ident)
-                          (literal
-                            (string)))
-                        (binary_expression
-                          (nested_ident)
-                          (literal
-                            (string)))))
                     (binary_expression
+                      (nested_ident)
                       (literal
-                        (number))
+                        (string)))
+                    (binary_expression
+                      (nested_ident)
                       (literal
-                        (number)))))
-                (block)))))))
+                        (string)))))
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))))
+            (block)))))))

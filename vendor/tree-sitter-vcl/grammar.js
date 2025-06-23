@@ -21,6 +21,7 @@ module.exports = grammar({
       'binary_times',
       'binary_plus',
       'binary_relation',
+      'binary_match',
       'binary_equality',
       'logical_and',
       'logical_or',
@@ -214,7 +215,7 @@ module.exports = grammar({
       choice(
         $.literal,
         $.ident_call_expr,
-        $.nested_ident, 
+        $.nested_ident,
         $.parenthesized_expression,
         $.binary_expression,
         $.neg_expr,
@@ -237,11 +238,13 @@ module.exports = grammar({
           ['!=', 'binary_equality'],
           ['>=', 'binary_relation'],
           ['>', 'binary_relation'],
+          ['~', 'binary_match'],
+          ['!~', 'binary_match'],
         ].map(([operator, precedence]) =>
           prec.left(
             precedence,
             seq(
-              field('left', choice($.expr)), 
+              field('left', choice($.expr)),
               field('operator', operator),
               field('right', choice($.expr)),
             ),
@@ -253,35 +256,6 @@ module.exports = grammar({
     bool: () => choice('true', 'false'),
     add: () => choice('+', '-'),
     multiply: () => choice('*', '/'),
-
-    eq: () => '==',
-    ne: () => '!=',
-    rmatch: () => '~', // regex or acl
-    nmatch: () => '!~',
-    g: () => '>',
-    l: () => '<',
-    ge: () => '>=',
-    le: () => '<=',
-    // not: ($) => '!',
-    or: () => '||',
-    and: () => '&&',
-
-    operator: $ =>
-      choice(
-        $.add,
-        $.multiply,
-        $.and,
-        $.or,
-        $.eq,
-        $.ne,
-        $.rmatch,
-        $.nmatch,
-        // $.not,
-        $.g,
-        $.l,
-        $.ge,
-        $.le,
-      ),
 
     literal: $ => choice($.string, $.duration, $.bytes, $.number, $.bool),
     string: () =>
