@@ -34,9 +34,24 @@
   "ok"
 ] @keyword
 
-(operator) @operator
-"=" @operator
-"!" @operator
+[
+  "=="
+  "!="
+  "~"
+  "!~"
+  ">"
+  "<"
+  ">="
+  "<="
+  "||"
+  "&&"
+  "+"
+  "-"
+  "*"
+  "/"
+  "="
+  "!"
+] @operator
 
 [
   "."
@@ -72,7 +87,11 @@
 ] @variable.builtin
 
 (binary_expression
-  operator: (operator (rmatch))
+  operator: "~"
+  right: (literal (string) @string.regex (#offset! @string.regex 0 1 0 -1)))
+
+(binary_expression
+  operator: "!~"
   right: (literal (string) @string.regex (#offset! @string.regex 0 1 0 -1)))
 
 (func_call_named_arg

@@ -1,0 +1,98 @@
+==================
+Binary expression precidence simple
+==================
+
+sub vcl_recv {
+    if (1 == 1 || 3 == 3) {
+    }
+}
+
+---
+
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))))
+            (block)))))))
+
+==================
+Binary expression precidence with real world exaple
+==================
+
+sub vcl_recv {
+    if (req.http.method == "GET" && req.http.url ~ "/api") {
+    }
+}
+
+---
+
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
+                (binary_expression
+                  (nested_ident)
+                  (literal
+                    (string)))
+                (binary_expression
+                  (nested_ident)
+                  (literal
+                    (string)))))
+            (block)))))))
+
+==================
+Binary expression precidence complex
+==================
+
+sub vcl_recv {
+    if ((req.http.method == "GET" && req.http.url == "/api") || 1 == 2) {
+    }
+}
+
+---
+
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (if_stmt
+            (parenthesized_expression
+              (binary_expression
+                (parenthesized_expression
+                  (binary_expression
+                    (binary_expression
+                      (nested_ident)
+                      (literal
+                        (string)))
+                    (binary_expression
+                      (nested_ident)
+                      (literal
+                        (string)))))
+                (binary_expression
+                  (literal
+                    (number))
+                  (literal
+                    (number)))))
+            (block)))))))

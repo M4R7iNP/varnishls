@@ -35,9 +35,25 @@
   "ok"
 ] @keyword
 
-(operator) @operator
-"=" @operator
-"!" @operator
+[
+  "=="
+  "!="
+  "~"
+  "!~"
+  ">"
+  "<"
+  ">="
+  "<="
+  "||"
+  "&&"
+  "+"
+  "-"
+  "*"
+  "/"
+  "="
+  "!"
+] @operator
+
 "." @operator
 ; [ "(" ")" ";"] @delimiter
 
@@ -53,9 +69,12 @@
 (nested_ident) @property
 
 (binary_expression
-  operator: (operator (rmatch))
+  operator: "~"
   right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
 
+(binary_expression
+  operator: "!~"
+  right: (literal (string) @regexp (#offset! @regexp 0 1 0 -1)))
 
 
 (ident_call_expr

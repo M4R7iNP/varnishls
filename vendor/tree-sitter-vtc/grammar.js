@@ -1,5 +1,38 @@
 const vclGrammar = require('../tree-sitter-vcl/grammar.js');
 
+/**
+ * SEE: https://varnish-cache.org/docs/trunk/reference/vtc.html
+ */
+
+const VTC_BLOCK_STATEMENTS = [
+  'rxreq',
+  'txresp',
+  'txreq',
+  'rxresp',
+  'txping',
+  'rxping',
+  'txprio',
+  'rxprio',
+  'txrst',
+  'rxrst',
+  'deplay',
+  'rxsettings',
+  'txsettings',
+  'rxwinup',
+  'txwinup',
+  'accept',
+  'txgoaway',
+  'rxgoaway',
+  'tls_handshake',
+  'expect_close',
+  'gunzip',
+
+  // tunnel statements
+  'pause',
+  'delay',
+  'resume',
+];
+
 module.exports = grammar(vclGrammar, {
   name: 'vtc',
 
@@ -26,19 +59,17 @@ module.exports = grammar(vclGrammar, {
         $.shell,
         $.setenv,
         $.logexpect,
-        $.feature_statement // Added feature_statement here
+        $.feature_statement,
+        $.tunnel_block,
       ),
-    feature_statement: $ => seq('feature', repeat1($.ident)), // Added feature_statement rule
+    feature_statement: $ => seq('feature', repeat1($.ident)), 
     loop_statement: $ => seq(
       'loop',
       $.number,
       field('block', seq('{', repeat($.vtc_block_statement), '}'))
     ),
-    txsettings: $ => 'txsettings', // Added txsettings rule
-    rxgoaway: $ => 'rxgoaway',   // Added rxgoaway rule
-    stream_block: $ => seq('stream', $.number, field('block', seq('{', repeat($.vtc_block_statement), '}')), repeat($.argument)), // Added stream_block rule
-    accept: $ => 'accept', // Added accept rule
-    vtc_block_statement: $ => choice($.txrx_statement, $.expect, $.expect_close, $.tls_config, $.tls_handshake, $.send, $.barrier, $.loop_statement, $.delay, $.accept, $.txsettings, $.rxgoaway, $.stream_block), // Added txsettings, rxgoaway, and stream_block
+    stream_block: $ => seq('stream', $.number, field('block', seq('{', repeat($.vtc_block_statement), '}')), repeat($.argument)),
+    vtc_block_statement: $ => choice($.vtc_block_statement_with_arguments, $.expect, $.tls_config, $.send, $.recv, $.barrier, $.loop_statement, $.delay, $.stream_block),
     varnishtest: $ => seq(choice('varnishtest', 'vtest'), $.string),
     server: $ =>
       seq(
@@ -62,7 +93,13 @@ module.exports = grammar(vclGrammar, {
         optional(field('block', seq('{', repeat($.tls_config_statement), '}'))),
         repeat($.argument),
       ),
-    tls_handshake: $ => 'tls_handshake',
+    tunnel_block: $ =>
+      seq(
+        'tunnel',
+        field('ident', $.ident),
+        optional(field('block', seq('{', repeat($.vtc_block_statement), '}'))),
+        repeat($.argument),
+      ),
     varnish: $ =>
       seq(
         'varnish',
@@ -123,14 +160,13 @@ module.exports = grammar(vclGrammar, {
         ),
       ),
 
-    txrx_statement: $ =>
+    // general block statement with arguments
+    vtc_block_statement_with_arguments: $ =>
       seq(
-        choice('rxreq', 'txresp', 'txreq', 'rxresp', 'deplay'),
+        choice(...VTC_BLOCK_STATEMENTS),
         repeat(choice($.req_argument, $.argument)),
       ),
     expect: $ => seq('expect', $.binary_expression),
-    expect_close: $ => 'expect_close',
-
 
     // <undef> is valid in «expect req.http.null-header == <undef>»
     literal: (_$, prev) => choice(prev, '<undef>'),
@@ -157,7 +193,8 @@ module.exports = grammar(vclGrammar, {
       ),
 
     variable: $ => seq('${', $.ident, '}'),
-    send: $ => seq('send', choice($.string, $.number)), // Modified to accept string or number
+    send: $ => seq('send', choice($.string, $.number)),
+    recv: $ => seq('recv', choice($.string, $.number)),
     tls_version: $ => choice('TLSv1.0', 'TLSv1.1', 'TLSv1.2', 'TLSv1.3'),
     logexpect_expect: $ => seq('expect', /.*/),
     logexpect: $ =>
