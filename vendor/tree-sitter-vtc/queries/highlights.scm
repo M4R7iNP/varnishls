@@ -26,6 +26,7 @@
   "logexpect"
   "tls_config"
   "tls_handshake"
+  "recv"
   "send"
   "vtest"
   "cond"
@@ -33,6 +34,9 @@
   "sync"
   "deplay"
   "expect_close"
+  "tunnel"
+  "pause"
+  "resume"
 ] @keyword
 
 "<undef>" @constant
