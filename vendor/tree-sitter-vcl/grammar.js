@@ -307,6 +307,7 @@ module.exports = grammar({
           'purge',
           'fetch',
           'ok',
+          'vcl',
         ),
         optional(seq('(', optional(commaSep($.expr)), ')')),
       ),

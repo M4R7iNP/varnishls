@@ -1,0 +1,42 @@
+==================
+normal returns
+==================
+
+sub vcl_recv {
+    return(hit);
+    return(pass);
+}
+
+---
+
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (ret_stmt
+            (varnish_internal_return_methods)))
+        (stmt
+          (ret_stmt
+            (varnish_internal_return_methods)))))))
+
+==================
+return vcl
+==================
+
+sub vcl_recv {
+    return (vcl(www_vg_no));
+}
+
+---
+
+(source_file
+  (toplev_declaration
+    (sub_declaration
+      (ident)
+      (block
+        (stmt
+          (ret_stmt
+            (varnish_internal_return_methods
+              (ident))))))))
