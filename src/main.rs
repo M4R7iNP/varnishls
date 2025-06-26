@@ -281,14 +281,14 @@ async fn main() -> ExitCode {
             if json {
                 println!("{}", vmod.json);
             } else {
-                println!("VMOD: {:?}", vmod);
+                println!("VMOD: {vmod:?}");
             }
         }
         Command::InspectVcc { path } => {
             let src = fs::read_to_string(&path).await.expect("Could not read VCC");
 
             let scope = varnishls::vcc::parse_vcc(src);
-            println!("scope: {:?}", scope);
+            println!("scope: {scope:?}");
         }
         Command::Format {
             write,

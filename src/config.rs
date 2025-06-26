@@ -231,14 +231,14 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        println!("{:?}", config);
+        println!("{config:?}");
         assert_config_defaults(config);
     }
 
     #[test]
     fn empty_config_with_defaults() {
         let config = Config::default();
-        println!("{:?}", config);
+        println!("{config:?}");
         assert_config_defaults(config);
     }
 
@@ -252,7 +252,7 @@ mod tests {
         "#;
 
         let parsed: LintConfig = toml::from_str(toml_str).unwrap();
-        println!("{:?}", parsed);
+        println!("{parsed:?}");
         assert_eq!(parsed.no_rewrite_req_url, LintLevel::Hint);
         assert_eq!(parsed.prefer_else_if, LintLevel::Warning);
         assert_eq!(parsed.prefer_lowercase_headers, LintLevel::Info);

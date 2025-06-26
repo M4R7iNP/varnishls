@@ -1,20 +1,20 @@
 use crate::{
     config::LintConfig,
     parser,
-    safe_regex::{is_regex_safe, SafeRegexError},
+    safe_regex::{SafeRegexError, is_regex_safe},
     static_autocomplete_items,
     varnish_builtins::{
-        self, get_backend_field_types, get_probe_field_types, AutocompleteSearchOptions,
-        Definition, Definitions, HasTypeProperties, Type,
+        self, AutocompleteSearchOptions, Definition, Definitions, HasTypeProperties, Type,
+        get_backend_field_types, get_probe_field_types,
     },
 };
 
 use log::{debug, error};
-use ropey::{iter::Chunks, Rope};
+use ropey::{Rope, iter::Chunks};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::{cmp::Ordering, iter::Iterator, path::PathBuf};
-use streaming_iterator::{convert as convert_to_streaming_iterator, StreamingIterator};
+use streaming_iterator::{StreamingIterator, convert as convert_to_streaming_iterator};
 use tower_lsp::lsp_types::*;
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, TextProvider, Tree};
 
@@ -328,7 +328,7 @@ impl Document {
             ),
         );
         if let Err(err) = q {
-            log::error!("Failed exec query for goto definition: {}", err);
+            log::error!("Failed exec query for goto definition: {err}");
             return None;
         }
         let q = q.unwrap();
@@ -359,6 +359,7 @@ impl Document {
         global_scope: &Definitions,
         config: &LintConfig,
     ) -> Vec<LintError> {
+        debug!("get_error_ranges start");
         let mut cursor = self.ast.walk();
         let mut error_ranges = Vec::new();
         let mut recurse = true;
@@ -366,6 +367,8 @@ impl Document {
             pub line: usize,
         }
         let mut varnishls_ignore: Option<VarnishlsIgnore> = None;
+        let mut toplev_node = self.ast.root_node();
+        let mut is_at_top = true;
 
         loop {
             if (recurse && cursor.goto_first_child()) || cursor.goto_next_sibling() {
@@ -378,6 +381,13 @@ impl Document {
             }
 
             let node = cursor.node();
+            if node.kind() == "toplev_declaration" {
+                is_at_top = true;
+            } else if is_at_top {
+                toplev_node = node;
+                is_at_top = false;
+            }
+
             macro_rules! get_location {
                 (node: $node:expr) => {
                     Location {
@@ -515,20 +525,15 @@ impl Document {
                         // cache key might get a different response that intended.
                         if config.no_rewrite_req_url.is_enabled()
                             && left_ident_text.as_str() == "req.url"
+                            && toplev_node.kind() == "sub_declaration"
+                            && let Some(ident_node) = toplev_node.child_by_field_name("ident")
+                            && get_node_text(&self.rope, &ident_node) == "vcl_recv"
                         {
-                            let toplev_decl = get_toplev_declaration_from_node(node);
-                            if toplev_decl.kind() == "sub_declaration" {
-                                if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
-                                    let sub_name = get_node_text(&self.rope, &ident_node);
-                                    if sub_name == "vcl_recv" {
-                                        add_error!(
-                                            node: node,
-                                            severity: config.no_rewrite_req_url.lsp_severity(),
-                                            "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a consious decision whether to edit the cache key or just the backend url."
-                                        );
-                                    }
-                                }
-                            }
+                            add_error!(
+                                node: node,
+                                severity: config.no_rewrite_req_url.lsp_severity(),
+                                "[no_rewrite_req_url] Don't rewrite req.url. Rather, make a consious decision whether to edit the cache key or just the backend url."
+                            );
                         }
 
                         if config.prefer_lowercase_headers.is_enabled()
@@ -751,7 +756,7 @@ impl Document {
                         .collect::<Vec<Node>>();
                     if required_args.len() > arg_nodes.len() {
                         let missing_arg = required_args[arg_nodes.len()];
-                        debug!("missing_arg: {:?}", missing_arg);
+                        debug!("missing_arg: {missing_arg:?}");
                         let mut message = "Missing required argument".to_string();
                         if let Some(ref missing_arg_name) = missing_arg.name {
                             message.push(' ');
@@ -846,9 +851,8 @@ impl Document {
                         }
 
                         if let Some(restricted) = func.restricted.as_ref() {
-                            let toplev_decl = get_toplev_declaration_from_node(node);
-                            if toplev_decl.kind() == "sub_declaration" {
-                                if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
+                            if toplev_node.kind() == "sub_declaration" {
+                                if let Some(ident_node) = toplev_node.child_by_field_name("ident") {
                                     let sub_name = &*get_node_text(&self.rope, &ident_node);
                                     if sub_name.starts_with("vcl_") {
                                         let mut search = vec![sub_name];
@@ -895,9 +899,8 @@ impl Document {
 
                     // check whether e.g. req/resp is allowed from this builtin subroutine
                     // TODO: check where custom subroutines are called from
-                    let toplev_decl = get_toplev_declaration_from_node(node);
-                    if toplev_decl.kind() == "sub_declaration" {
-                        if let Some(ident_node) = toplev_decl.child_by_field_name("ident") {
+                    if toplev_node.kind() == "sub_declaration" {
+                        if let Some(ident_node) = toplev_node.child_by_field_name("ident") {
                             let sub_name = &*get_node_text(&self.rope, &ident_node);
                             let parts = text.split('.').collect::<Vec<&str>>();
                             if sub_name.starts_with("vcl_") {
@@ -1032,6 +1035,7 @@ impl Document {
             }
         }
 
+        debug!("get_error_ranges done!");
         error_ranges
     }
 
@@ -1158,7 +1162,7 @@ impl Document {
             "#,
         );
         if let Err(err) = q {
-            debug!("Error: {}", err);
+            debug!("Error: {err}");
             return vec![];
         }
         let q = q.unwrap();
@@ -1244,7 +1248,7 @@ impl Document {
             ),
         );
         if let Err(err) = q {
-            debug!("Error: {}", err);
+            debug!("Error: {err}");
             return vec![];
         }
         let q = q.unwrap();
@@ -1308,7 +1312,7 @@ impl Document {
             target_point.column -= 1;
         }
 
-        debug!("target point: {}", target_point);
+        debug!("target point: {target_point}");
 
         let mut text = "".to_string();
         let mut search_type: Option<Type> = None;
@@ -1341,7 +1345,7 @@ impl Document {
         let mut stop = false;
         while !stop {
             let node = cursor.node();
-            debug!("visiting node {:?}", node);
+            debug!("visiting node {node:?}");
 
             let Some(parent_node) = node.parent() else {
                 break;
@@ -1521,11 +1525,11 @@ impl Document {
             match node.kind() {
                 "nested_ident" => {
                     text = get_node_text(&self.rope, &node).to_string();
-                    debug!("got text for nested_ident {:?} {}", node, text);
+                    debug!("got text for nested_ident {node:?} {text}");
                 }
                 "ident" if node.parent().unwrap().kind() != "nested_ident" => {
                     text = get_node_text(&self.rope, &node).to_string();
-                    debug!("got text for ident {:?} {}", node, text);
+                    debug!("got text for ident {node:?} {text}");
                 }
                 "sub_declaration" | "if_stmt" | "elsif_stmt" | "else_stmt" => {
                     if !text.contains('.') {
@@ -1550,7 +1554,7 @@ impl Document {
             }
         }
 
-        debug!("text: «{:?}»", text);
+        debug!("text: «{text:?}»");
 
         // identifiers written so far (split by dot)
         let idents: Vec<&str> = text.split('.').collect();
@@ -1567,9 +1571,9 @@ impl Document {
             .map(|(prop_name, property)| CompletionItem {
                 label: prop_name.to_string(),
                 detail: Some(match property {
-                    Type::Func(_func) => format!("{}", property),
-                    Type::Backend => format!("BACKEND {}", prop_name),
-                    _ => format!("{} {}", property, prop_name),
+                    Type::Func(_func) => format!("{property}"),
+                    Type::Backend => format!("BACKEND {prop_name}"),
+                    _ => format!("{property} {prop_name}"),
                 }),
                 kind: Some(match property {
                     Type::Func(_func) => CompletionItemKind::FUNCTION,
@@ -1596,7 +1600,7 @@ impl Document {
                             })
                             .collect::<Vec<_>>()
                             .join(", ");
-                        format!("{}({})", prop_name, args_str)
+                        format!("{prop_name}({args_str})")
                     }
                     _ => prop_name.to_string(),
                 }),
@@ -1823,20 +1827,6 @@ fn point_to_tuple(point: Point) -> (usize, usize) {
     (point.row, point.column)
 }
 
-fn get_toplev_declaration_from_node(node: Node) -> Node {
-    let mut node = node;
-    loop {
-        let Some(parent_node) = node.parent() else {
-            break;
-        };
-        if parent_node.kind() == "toplev_declaration" {
-            break;
-        }
-        node = parent_node;
-    }
-    node
-}
-
 fn find_parent(node: Node, kind: String) -> Option<Node> {
     let mut node = node;
     loop {
@@ -1850,6 +1840,7 @@ fn find_parent(node: Node, kind: String) -> Option<Node> {
 
 #[cfg(test)]
 mod tests {
+    use insta::{assert_snapshot, glob};
     use std::collections::BTreeMap;
 
     use crate::varnish_builtins::get_varnish_builtins;
@@ -1878,7 +1869,7 @@ sub vcl_recv {
                 get_varnish_builtins(),
             )
             .unwrap();
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert!(result.iter().any(|item| item.label == "http"));
     }
 
@@ -1923,7 +1914,7 @@ import xkey;
             .iter()
             .map(|import| import.name.clone())
             .collect();
-        println!("imports: {:?}", vmod_names);
+        println!("imports: {vmod_names:?}");
         assert_eq!(vmod_names, vec!["brotli", "jwt", "xkey"]);
     }
 
@@ -1940,7 +1931,7 @@ sub my_custom_sub {}
             None,
         );
         let result = doc.get_subroutines();
-        println!("subroutines: {:?}", result);
+        println!("subroutines: {result:?}");
         assert_eq!(result.len(), 3);
         assert_eq!(result[0], "vcl_init");
         assert_eq!(result[1], "vcl_recv");
@@ -2008,7 +1999,7 @@ sub vcl_recv {
             },
             get_varnish_builtins(),
         );
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert_eq!(
             result.unwrap()[0].detail,
             Some("BACKEND backend_hint".to_string())
@@ -2047,7 +2038,7 @@ sub vcl_recv {
             },
             scope,
         );
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         let result = result.unwrap();
         /*
         assert_eq!(
@@ -2080,7 +2071,7 @@ backend localhost {
             },
             get_varnish_builtins(),
         );
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         let result = result.unwrap();
         assert_eq!(result.first().unwrap().detail, Some("port".to_string()));
         assert_eq!(result.len(), 1);
@@ -2106,7 +2097,7 @@ sub vcl_recv {
             None,
         );
         let includes = doc.get_includes();
-        println!("includes: {:?}", includes);
+        println!("includes: {includes:?}");
         assert_eq!(
             includes
                 .iter()
@@ -2178,9 +2169,8 @@ sub vcl_init {
                     nested_pos: Default::default(),
                 },
             )]),
-            ..Default::default()
         });
-        println!("result: {:?}", result);
+        println!("result: {result:?}");
         assert_eq!(result.len(), 2);
     }
 
@@ -2298,5 +2288,21 @@ backend my_backend {
             },
             "\n\n".to_string(),
         );
+    }
+
+    #[test]
+    fn lint_tests() {
+        glob!("lint_tests/*.vcl", |input_path| {
+            let doc = Document::new(
+                Url::parse("file:///test.vcl").unwrap(),
+                std::fs::read_to_string(input_path).unwrap(),
+                None,
+            );
+
+            let defs = get_varnish_builtins();
+            let errors = doc.diagnostics(defs, &Default::default());
+            let errors_json = serde_json::to_string_pretty(&errors).unwrap();
+            assert_snapshot!(errors_json);
+        });
     }
 }

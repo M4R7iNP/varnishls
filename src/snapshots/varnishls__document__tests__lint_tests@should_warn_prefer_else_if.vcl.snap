@@ -1,0 +1,64 @@
+---
+source: src/document.rs
+expression: errors_json
+input_file: src/lint_tests/should_warn_prefer_else_if.vcl
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 3,
+        "character": 6
+      },
+      "end": {
+        "line": 3,
+        "character": 11
+      }
+    },
+    "severity": 4,
+    "message": "Prefer «else if»",
+    "data": {
+      "quickfix_label": "Replace  with else if",
+      "replace_with": "else if",
+      "type": "PreferElseIf"
+    }
+  },
+  {
+    "range": {
+      "start": {
+        "line": 5,
+        "character": 6
+      },
+      "end": {
+        "line": 5,
+        "character": 10
+      }
+    },
+    "severity": 4,
+    "message": "Prefer «else if»",
+    "data": {
+      "quickfix_label": "Replace elif with else if",
+      "replace_with": "else if",
+      "type": "PreferElseIf"
+    }
+  },
+  {
+    "range": {
+      "start": {
+        "line": 7,
+        "character": 6
+      },
+      "end": {
+        "line": 7,
+        "character": 12
+      }
+    },
+    "severity": 4,
+    "message": "Prefer «else if»",
+    "data": {
+      "quickfix_label": "Replace elseif with else if",
+      "replace_with": "else if",
+      "type": "PreferElseIf"
+    }
+  }
+]

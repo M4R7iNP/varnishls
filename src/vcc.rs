@@ -285,7 +285,7 @@ fn check_restrict<'a>(parts: &mut Peekable<impl Iterator<Item = &'a str>>) -> Op
  */
 pub fn parse_vcc(vcc_file: String) -> Type {
     // split file by newline+dollar sign
-    let vcc_file_with_starting_newline = format!("\n{}", vcc_file);
+    let vcc_file_with_starting_newline = format!("\n{vcc_file}");
     let mut parts = vcc_file_with_starting_newline.split("\n$").peekable();
     parts.next(); // remove first part
 

@@ -126,7 +126,7 @@ impl std::fmt::Display for Type {
                 f,
                 "{}{}{}",
                 match func.ret_type {
-                    Some(ref return_str) => format!("{} ", return_str),
+                    Some(ref return_str) => format!("{return_str} "),
                     _ => "".to_string(),
                 },
                 func.name,
@@ -318,16 +318,16 @@ impl Func {
                 .filter_map(|arg| {
                     let mut str = String::new();
                     if let Some(ref r#type) = arg.r#type {
-                        str.push_str(format!("{}", r#type).as_str());
+                        str.push_str(format!("{type}").as_str());
                     }
                     if let Some(ref arg_name) = arg.name {
-                        str.push_str(format!(" {}", arg_name).as_str());
+                        str.push_str(format!(" {arg_name}").as_str());
                     }
                     if let Some(ref default_value) = arg.default_value {
-                        str.push_str(format!(" = {}", default_value).as_str());
+                        str.push_str(format!(" = {default_value}").as_str());
                     }
                     if arg.optional {
-                        str = format!("[{}]", str);
+                        str = format!("[{str}]");
                     }
 
                     if !str.is_empty() {

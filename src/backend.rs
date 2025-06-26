@@ -262,7 +262,7 @@ impl Backend {
                 client.log_message(MessageType::ERROR, message).await;
             }
             None => {
-                error!("{}", message);
+                error!("{message}");
             }
         }
     }
@@ -640,7 +640,7 @@ impl LanguageServer for Backend {
                         "{} {}{}{}",
                         func.r#return
                             .as_ref()
-                            .map(|r| format!("{}", r))
+                            .map(|r| format!("{r}"))
                             .unwrap_or_else(|| "VOID".to_string()),
                         func.name,
                         func.get_signature_string(),
@@ -654,7 +654,7 @@ impl LanguageServer for Backend {
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::PlainText,
-                value: format!("{}", r#type),
+                value: format!("{type}"),
             }),
             range: None,
         }))
@@ -692,7 +692,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         debug!("document_symbol({})", uri);
         let Some(cache_entry) = self.cache.get(&uri) else {
-            error!("Document not found in cache: {}", uri);
+            error!("Document not found in cache: {uri}");
             return Ok(None);
         };
 

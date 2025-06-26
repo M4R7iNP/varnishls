@@ -281,7 +281,7 @@ pub async fn read_vmod_lib(
     let elf = Elf::parse(&file)?;
 
     // Find symbol in symbol table
-    let vmod_data_symbol_name = format!("Vmod_{}_Data", vmod_name);
+    let vmod_data_symbol_name = format!("Vmod_{vmod_name}_Data");
     let vmd_sym = elf
         .dynsyms
         .iter()
@@ -342,7 +342,7 @@ pub async fn read_vmod_lib_by_name(
     name: String,
     search_paths: Vec<PathBuf>,
 ) -> Result<Option<VmodData>, Box<dyn Error + Send + Sync>> {
-    let file_name = format!("libvmod_{}.so", name);
+    let file_name = format!("libvmod_{name}.so");
     for search_path in search_paths {
         let path = search_path.join(&file_name);
         if path.exists() {

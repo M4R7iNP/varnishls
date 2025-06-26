@@ -1,0 +1,45 @@
+---
+source: src/document.rs
+expression: errors_json
+input_file: src/lint_tests/should_warn_on_upcase_headers.vcl
+---
+[
+  {
+    "range": {
+      "start": {
+        "line": 1,
+        "character": 8
+      },
+      "end": {
+        "line": 1,
+        "character": 26
+      }
+    },
+    "severity": 4,
+    "message": "Prefer lowercase headers",
+    "data": {
+      "quickfix_label": "Downcase",
+      "replace_with": "resp.http.location",
+      "type": "PreferLowercaseHeader"
+    }
+  },
+  {
+    "range": {
+      "start": {
+        "line": 2,
+        "character": 8
+      },
+      "end": {
+        "line": 2,
+        "character": 45
+      }
+    },
+    "severity": 4,
+    "message": "Prefer lowercase headers",
+    "data": {
+      "quickfix_label": "Downcase",
+      "replace_with": "resp.http.access-control-allow-origin",
+      "type": "PreferLowercaseHeader"
+    }
+  }
+]

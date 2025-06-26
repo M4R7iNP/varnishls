@@ -22,7 +22,7 @@ pub fn source_file() -> Vec<CompletionItem> {
             detail: Some(field.to_string()),
             kind: Some(CompletionItemKind::KEYWORD),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
-            insert_text: Some(format!("{} ${{1}} {{\n${{2}}\n}}", field)),
+            insert_text: Some(format!("{field} ${{1}} {{\n${{2}}\n}}")),
             ..Default::default()
         })
         .for_each(|item| statements.push(item));
@@ -34,7 +34,7 @@ pub fn source_file() -> Vec<CompletionItem> {
             detail: Some(keyword.to_string()),
             kind: Some(CompletionItemKind::KEYWORD),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
-            insert_text: Some(format!("{} \"${{1}}\";", keyword)),
+            insert_text: Some(format!("{keyword} \"${{1}}\";")),
             ..Default::default()
         })
         .for_each(|item| statements.push(item));

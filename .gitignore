@@ -2,3 +2,5 @@
 /node_modules
 /vendor/tree-sitter-*/src
 *.wasm
+*.so
+varnishls.log
