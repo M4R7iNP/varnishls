@@ -399,8 +399,7 @@ impl LanguageServer for Backend {
         debug!("did_open({})", params.text_document.uri);
         let uri = params.text_document.uri;
         if let Some(mut doc) = self.document_map.get_mut(&uri) {
-            let version = params.text_document.version;
-            doc.edit_fulltext(version, params.text_document.text);
+            doc.edit_fulltext(params.text_document.text);
 
             // clear cache
             self.cache.remove(&uri);

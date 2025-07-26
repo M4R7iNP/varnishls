@@ -165,20 +165,20 @@ impl Document {
         self.version
     }
 
-    pub fn edit(&mut self, version: i32, edits: impl Iterator<Item = (Option<Range>, String)>) {
+    pub fn edit(&mut self, _version: i32, edits: impl Iterator<Item = (Option<Range>, String)>) {
         for (range, text) in edits {
             match range {
                 Some(range) => {
-                    self.edit_range(version, range, text);
+                    self.edit_range(range, text);
                 }
                 None => {
-                    self.edit_fulltext(version, text);
+                    self.edit_fulltext(text);
                 }
             }
         }
     }
 
-    fn edit_range(&mut self, _version: i32, range: Range, text: String) {
+    fn edit_range(&mut self, range: Range, text: String) {
         let mut new_ast = self.ast.clone();
 
         let start_line = self.rope.line(range.start.line as usize);
@@ -250,7 +250,7 @@ impl Document {
         self.ast = new_new_ast;
     }
 
-    pub fn edit_fulltext(&mut self, _version: i32, text: String) {
+    pub fn edit_fulltext(&mut self, text: String) {
         let rope = Rope::from(text.clone());
         let ast = self.parser.lock().unwrap().parse(&text, None).unwrap();
         self.rope = rope;
@@ -1236,13 +1236,14 @@ impl Document {
     }
 
     pub fn get_references_for_ident(&self, ident: &str) -> Vec<Reference> {
+        let escaped_regex_ident = regex_syntax::escape(ident);
         let q = Query::new(
             &self.ast.language(),
             &format!(
                 r#"
                 [
-                    ((ident) @ident (#eq? @ident "{ident}"))
-                    ((nested_ident) @nested_ident (#match? @nested_ident "^{ident}\\b"))
+                    ((ident) @ident (#match? @ident "^(?i){escaped_regex_ident}$"))
+                    ((nested_ident) @nested_ident (#match? @nested_ident "^(?i){escaped_regex_ident}\\b"))
                 ]
                 "#
             ),
@@ -1554,7 +1555,7 @@ impl Document {
             }
         }
 
-        debug!("text: «{text:?}»");
+        debug!("text: «{text}»");
 
         // identifiers written so far (split by dot)
         let idents: Vec<&str> = text.split('.').collect();
@@ -2226,68 +2227,36 @@ backend my_backend {
 
         // insert second newline
         doc.edit_range(
-            1,
-            Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 0,
-                    character: 0,
-                },
-            },
+            Range::new(Position::new(0, 0), Position::new(0, 0)),
             "\n".to_string(),
         );
+
+        assert_eq!(doc.rope.to_string(), "\n\n");
+
         // insert third newline
         doc.edit_range(
-            2,
-            Range {
-                start: Position {
-                    line: 1,
-                    character: 0,
-                },
-                end: Position {
-                    line: 1,
-                    character: 0,
-                },
-            },
+            Range::new(Position::new(1, 0), Position::new(1, 0)),
             "\n".to_string(),
         );
+
+        assert_eq!(doc.rope.to_string(), "\n\n\n");
 
         // now, delete everything
         doc.edit_range(
-            3,
-            Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 3,
-                    character: 0,
-                },
-            },
+            Range::new(Position::new(0, 0), Position::new(3, 0)),
             "".to_string(),
         );
-
         // now, our state is empty, but the editor probably has an empty newline
+
+        assert_eq!(doc.rope.to_string(), "");
 
         // insert new newlines, spanning the newline the editor has, but we don't
         doc.edit_range(
-            4,
-            Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 1,
-                    character: 0,
-                },
-            },
+            Range::new(Position::new(0, 0), Position::new(1, 0)),
             "\n\n".to_string(),
         );
+
+        assert_eq!(doc.rope.to_string(), "\n\n");
     }
 
     #[test]
