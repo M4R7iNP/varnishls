@@ -5,6 +5,14 @@ pre-commit:
       run: cargo test -q
     clippy:
       run: cargo clippy --no-deps -- -D warnings
+    test_tree_sitter_vcl:
+      run: |
+        cd vendor/tree-sitter-vcl
+        npx tree-sitter test
+    test_tree_sitter_vtc:
+      run: |
+        cd vendor/tree-sitter-vtc
+        npx tree-sitter test
 
 output:
   - failure

@@ -768,7 +768,8 @@ sub vcl_fini {
                 (nested_ident)
                 (literal
                   (duration
-                    (number)))))
+                    (number)
+                    (duration_unit)))))
             (block
               (stmt
                 (call_stmt
@@ -833,7 +834,8 @@ sub vcl_fini {
             (nested_ident)
             (literal
               (duration
-                (number)))))
+                (number)
+                (duration_unit)))))
         (stmt
           (set_stmt
             (nested_ident)
