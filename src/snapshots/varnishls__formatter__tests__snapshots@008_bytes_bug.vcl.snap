@@ -1,0 +1,12 @@
+---
+source: src/formatter.rs
+expression: "format(input, &config).unwrap()"
+input_file: src/formatter_tests/008_bytes_bug.vcl
+---
+import std;
+sub vcl_init {
+    std.log(4GB);
+    std.log(256mb);
+    std.log(-123b);
+    std.log(123.123t);
+}

@@ -271,9 +271,11 @@ module.exports = grammar({
       ),
     number: () => /-?\d+(\.\d+)?/,
     // https://github.com/varnishcache/varnish-cache/blob/a3bc025c2df28e4a76e10c2c41217c9864e9963b/lib/libvcc/vcc_utils.c#L300
-    duration: $ => seq($.number, choice('ms', 's', 'm', 'h', 'd', 'w', 'y')),
+    duration: $ => seq($.number, $.duration_unit),
+    duration_unit: () => choice('ms', 's', 'm', 'h', 'd', 'w', 'y'),
     // https://github.com/varnishcache/varnish-cache/blob/d5a5aa9cc879320840ca467ddbb7df0f99c9ba0f/lib/libvarnish/vnum.c#L307-L311
-    bytes: $ => seq($.number, /b|[kmgtp]b?/i),
+    bytes: $ => seq($.number, $.bytes_unit),
+    bytes_unit: () => /b|[kmgtp]b?/i,
 
     ident: () => /[a-zA-Z][\w-]*/, // ident must start with a letter
     // optional due to autocomplete
