@@ -556,16 +556,17 @@ impl Document {
                             });
                         }
 
-                        if config.prefer_custom_headers_without_prefix.is_enabled() && is_http {
-                            if let Some(hdr) = left_parts.get(2) {
-                                let hdr = hdr.to_lowercase();
-                                if hdr.starts_with("x-") && !hdr.starts_with("x-forwarded-") {
-                                    add_error!(
-                                        node: node,
-                                        severity: config.prefer_custom_headers_without_prefix.lsp_severity(),
-                                        "Prefer custom headers without the «X-»-prefix"
-                                    );
-                                }
+                        if config.prefer_custom_headers_without_prefix.is_enabled()
+                            && is_http
+                            && let Some(hdr) = left_parts.get(2)
+                        {
+                            let hdr = hdr.to_lowercase();
+                            if hdr.starts_with("x-") && !hdr.starts_with("x-forwarded-") {
+                                add_error!(
+                                    node: node,
+                                    severity: config.prefer_custom_headers_without_prefix.lsp_severity(),
+                                    "Prefer custom headers without the «X-»-prefix"
+                                );
                             }
                         }
                     }
@@ -850,35 +851,32 @@ impl Document {
                             }
                         }
 
-                        if let Some(restricted) = func.restricted.as_ref() {
-                            if toplev_node.kind() == "sub_declaration" {
-                                if let Some(ident_node) = toplev_node.child_by_field_name("ident") {
-                                    let sub_name = &*get_node_text(&self.rope, &ident_node);
-                                    if sub_name.starts_with("vcl_") {
-                                        let mut search = vec![sub_name];
-                                        let mapping = [
-                                            ("vcl_recv", "client"),
-                                            ("vcl_deliver", "client"),
-                                            ("vcl_backend_fetch", "backend"),
-                                            ("vcl_backend_response", "backend"),
-                                            ("vcl_init", "housekeeping"),
-                                            ("vcl_fini", "housekeeping"),
-                                        ];
+                        if let Some(restricted) = func.restricted.as_ref()
+                            && toplev_node.kind() == "sub_declaration"
+                            && let Some(ident_node) = toplev_node.child_by_field_name("ident")
+                        {
+                            let sub_name = &*get_node_text(&self.rope, &ident_node);
+                            if sub_name.starts_with("vcl_") {
+                                let mut search = vec![sub_name];
+                                let mapping = [
+                                    ("vcl_recv", "client"),
+                                    ("vcl_deliver", "client"),
+                                    ("vcl_backend_fetch", "backend"),
+                                    ("vcl_backend_response", "backend"),
+                                    ("vcl_init", "housekeeping"),
+                                    ("vcl_fini", "housekeeping"),
+                                ];
 
-                                        mapping
-                                            .iter()
-                                            .filter(|(search_sub_name, _)| {
-                                                search_sub_name == &sub_name
-                                            })
-                                            .for_each(|(_, alias)| search.push(alias));
+                                mapping
+                                    .iter()
+                                    .filter(|(search_sub_name, _)| search_sub_name == &sub_name)
+                                    .for_each(|(_, alias)| search.push(alias));
 
-                                        if !search
-                                            .iter()
-                                            .any(|search| restricted.contains(&search.to_string()))
-                                        {
-                                            add_error!(node: node, "Cannnot be called from {sub_name}");
-                                        }
-                                    }
+                                if !search
+                                    .iter()
+                                    .any(|search| restricted.contains(&search.to_string()))
+                                {
+                                    add_error!(node: node, "Cannnot be called from {sub_name}");
                                 }
                             }
                         }
@@ -1210,10 +1208,10 @@ impl Document {
 
                     let mut r#type_box = Box::new(r#type.to_owned());
 
-                    if let Type::Func(func) = r#type {
-                        if let Some(func_return) = func.r#return.clone() {
-                            r#type_box = func_return;
-                        }
+                    if let Type::Func(func) = r#type
+                        && let Some(func_return) = func.r#return.clone()
+                    {
+                        r#type_box = func_return;
                     }
 
                     r#type_box
@@ -1334,11 +1332,11 @@ impl Document {
         // Move the cursor one node back if comma or end parenthesis
         if matches!(cursor.node().kind(), "," | ")") {
             // move cursor one point back
-            if let Some(prev_sibling) = cursor.node().prev_sibling() {
-                if prev_sibling.kind() != "(" {
-                    debug!("prev_sibling: {prev_sibling:?}");
-                    cursor.reset(prev_sibling);
-                }
+            if let Some(prev_sibling) = cursor.node().prev_sibling()
+                && prev_sibling.kind() != "("
+            {
+                debug!("prev_sibling: {prev_sibling:?}");
+                cursor.reset(prev_sibling);
             }
         }
 
@@ -1486,25 +1484,22 @@ impl Document {
                         );
                         if let Some(Type::Func(func)) = global_scope
                             .get_type_property_by_nested_idents(func_ident.split('.').collect())
-                        {
-                            if let Some(arg) = func
+                            && let Some(arg) = func
                                 .args
                                 .iter()
                                 .find(|arg| arg.name.as_ref() == Some(&arg_name))
-                            {
-                                if let Some(Type::Enum(enum_values)) = arg.r#type.as_ref() {
-                                    return Some(
-                                        enum_values
-                                            .iter()
-                                            .map(|enum_value| CompletionItem {
-                                                label: enum_value.to_string(),
-                                                kind: Some(CompletionItemKind::ENUM),
-                                                ..Default::default()
-                                            })
-                                            .collect(),
-                                    );
-                                }
-                            }
+                            && let Some(Type::Enum(enum_values)) = arg.r#type.as_ref()
+                        {
+                            return Some(
+                                enum_values
+                                    .iter()
+                                    .map(|enum_value| CompletionItem {
+                                        label: enum_value.to_string(),
+                                        kind: Some(CompletionItemKind::ENUM),
+                                        ..Default::default()
+                                    })
+                                    .collect(),
+                            );
                         }
                     }
                 }

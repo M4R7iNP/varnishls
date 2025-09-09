@@ -12,9 +12,9 @@ use tower_lsp::{Client, LanguageServer};
 use tree_sitter::Point;
 
 use crate::config::Config;
-use crate::document::{DiagnosticData, Document, Include, NestedPos, VmodImport, LEGEND_TYPES};
+use crate::document::{DiagnosticData, Document, Include, LEGEND_TYPES, NestedPos, VmodImport};
 use crate::formatter;
-use crate::varnish_builtins::{get_varnish_builtins, Definition, Definitions, Type};
+use crate::varnish_builtins::{Definition, Definitions, Type, get_varnish_builtins};
 use crate::vcc::parse_vcc_file_by_path;
 use crate::vmod::read_vmod_lib_by_name;
 
@@ -78,12 +78,11 @@ impl Backend {
             }
 
             // if this doc is not included from main vcl, just append it
-            if let Some(src_doc_url) = src_doc_url {
-                if !docs.iter().any(|doc_url| doc_url == src_doc_url)
-                    && self.document_map.contains_key(src_doc_url)
-                {
-                    docs.push(src_doc_url.clone());
-                }
+            if let Some(src_doc_url) = src_doc_url
+                && !docs.iter().any(|doc_url| doc_url == src_doc_url)
+                && self.document_map.contains_key(src_doc_url)
+            {
+                docs.push(src_doc_url.clone());
             }
 
             // debug!("got {} docs", docs.len());

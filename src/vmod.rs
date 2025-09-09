@@ -205,12 +205,11 @@ fn parse_vmod_json_obj(
         ..Default::default()
     };
 
-    if let Some(SerdeValue::Array(vmod_init_def)) = serde_value_arr.get(4) {
-        if let Some(SerdeValue::Array(array_containing_signature)) = vmod_init_def.get(1) {
-            if let Some(signature_items) = array_containing_signature.get(4..) {
-                func.args = parse_vmod_func_args(signature_items);
-            }
-        }
+    if let Some(SerdeValue::Array(vmod_init_def)) = serde_value_arr.get(4)
+        && let Some(SerdeValue::Array(array_containing_signature)) = vmod_init_def.get(1)
+        && let Some(signature_items) = array_containing_signature.get(4..)
+    {
+        func.args = parse_vmod_func_args(signature_items);
     }
 
     Ok(func)
