@@ -1,6 +1,6 @@
 use serde::{
-    de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
+    de::{self, Visitor},
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -16,6 +16,7 @@ fn default_vmod_paths() -> Vec<PathBuf> {
     vec![
         // ubuntu, debian
         "/usr/lib/x86_64-linux-gnu/varnish/vmods/".into(),
+        "/usr/lib/varnish-plus/vmods".into(),
         // fedora, centos
         "/usr/lib64/varnish/vmods/".into(),
         // freebsd
