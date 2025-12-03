@@ -1,4 +1,5 @@
 use goblin::elf::Elf;
+use log::error;
 use serde_json::{self, Value as SerdeValue};
 use std::error::Error;
 use std::ffi::CStr;
@@ -194,8 +195,9 @@ fn parse_vmod_json_obj(
 
     for method_serde_val in serde_value_arr[6..].iter() {
         let method_arr = method_serde_val.as_array().ok_or("Method is not array")?;
-        let func = parse_vmod_json_func(method_arr)?;
-        obj.properties.insert(func.name.clone(), Type::Func(func));
+        if let Ok(func) = parse_vmod_json_func(method_arr) {
+            obj.properties.insert(func.name.clone(), Type::Func(func));
+        }
     }
 
     let mut func = Func {
@@ -207,7 +209,7 @@ fn parse_vmod_json_obj(
 
     if let Some(SerdeValue::Array(vmod_init_def)) = serde_value_arr.get(4)
         && let Some(SerdeValue::Array(array_containing_signature)) = vmod_init_def.get(1)
-        && let Some(signature_items) = array_containing_signature.get(4..)
+        && let Some(signature_items) = array_containing_signature.get(3..)
     {
         func.args = parse_vmod_func_args(signature_items);
     }
@@ -216,7 +218,12 @@ fn parse_vmod_json_obj(
 }
 
 pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>> {
-    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json)?;
+    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json).inspect_err(|err| {
+        error!(
+            "Failed to parse VMOD JSON data: {err} (json snippet: {})",
+            &json[0..json.len().min(100)]
+        );
+    })?;
     let mut vmod_obj = Obj {
         read_only: true,
         ..Default::default()
@@ -259,7 +266,7 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>>
                 }
             }
             "$OBJ" => {
-                if let Ok(func) = parse_vmod_json_obj(row) {
+                if let Ok(func) = parse_vmod_json_obj(row).inspect_err(|err| error!("{err}")) {
                     vmod_obj
                         .properties
                         .insert(func.name.clone(), Type::Func(func));

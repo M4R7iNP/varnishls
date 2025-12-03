@@ -10,9 +10,10 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 use tower_lsp::{LspService, Server};
 
-use varnishls::backend::{read_config, Backend};
+use varnishls::backend::{Backend, read_config};
 use varnishls::document::Include;
 use varnishls::formatter;
+use varnishls::varnish_builtins;
 use varnishls::vmod::{read_vmod_lib, read_vmod_lib_by_name};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -163,7 +164,9 @@ async fn main() -> ExitCode {
             let config = read_config(&cwd).await.unwrap_or_default();
             debug!("config: {config:?}");
             let Some(initial_file_path) = file_path.or(config.main_vcl.clone()) else {
-                error!("Missing VCL file path to lint. Either setup main_vcl in .varnishls.toml or point cmd arg to your main VCL file.");
+                error!(
+                    "Missing VCL file path to lint. Either setup main_vcl in .varnishls.toml or point cmd arg to your main VCL file."
+                );
                 return ExitCode::from(2);
             };
 
@@ -270,18 +273,31 @@ async fn main() -> ExitCode {
                     .await
                     .expect("Failed to parse vmod")
             } else {
-                match read_vmod_lib_by_name(name, vec![]).await.unwrap() {
-                    Some(vmod) => vmod,
-                    None => {
-                        panic!("VMOD not found");
-                    }
-                }
+                read_vmod_lib_by_name(name, vec![])
+                    .await
+                    .unwrap()
+                    .expect("VMOD not found")
             };
 
             if json {
                 println!("{}", vmod.json);
             } else {
                 println!("VMOD: {vmod:?}");
+                let varnish_builtins::Type::Obj(ref obj) = vmod.scope else {
+                    unreachable!();
+                };
+                println!("Vmod functions:");
+                for (name, t) in &obj.properties {
+                    if let varnish_builtins::Type::Func(func) = t {
+                        println!(
+                            "{}.{}{}",
+                            vmod.name,
+                            name,
+                            func.get_signature_string()
+                        );
+                    }
+                }
+                // TODO: print out structs returned by functions
             }
         }
         Command::InspectVcc { path } => {

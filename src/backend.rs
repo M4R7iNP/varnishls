@@ -906,19 +906,32 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
         .collect::<Vec<_>>();
 
     for vmod_fut in vmod_futures {
-        if let Ok(Ok(Some(vmod))) = vmod_fut.await {
-            let vmod_name = vmod.name;
-            let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
-                error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
-                continue;
-            };
-            let def = Definition {
-                ident_str: import.name.clone(),
-                r#type: Box::new(vmod.scope),
-                loc: Some(import.loc.clone()),
-                nested_pos: import.nested_pos.clone(),
-            };
-            definitions.properties.insert(import.name.clone(), def);
+        match vmod_fut.await {
+            Ok(Ok(Some(vmod))) => {
+                let vmod_name = vmod.name;
+                let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
+                    error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+                    continue;
+                };
+                definitions.properties.insert(
+                    import.name.clone(),
+                    Definition {
+                        ident_str: import.name.clone(),
+                        r#type: Box::new(vmod.scope),
+                        loc: Some(import.loc.clone()),
+                        nested_pos: import.nested_pos.clone(),
+                    },
+                );
+            }
+            Ok(Ok(None)) => {
+                error!("Vmod not found");
+            }
+            Ok(Err(err)) => {
+                error!("Failed to read vmod library: {}", err);
+            }
+            Err(err) => {
+                error!("Vmod load task failed: {}", err);
+            }
         }
     }
 
