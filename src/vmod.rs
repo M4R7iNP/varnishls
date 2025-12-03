@@ -218,7 +218,12 @@ fn parse_vmod_json_obj(
 }
 
 pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>> {
-    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json)?;
+    let json_parsed: Vec<Vec<SerdeValue>> = serde_json::from_str(json).inspect_err(|err| {
+        error!(
+            "Failed to parse VMOD JSON data: {err} (json snippet: {})",
+            &json[0..json.len().min(100)]
+        );
+    })?;
     let mut vmod_obj = Obj {
         read_only: true,
         ..Default::default()
