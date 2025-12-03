@@ -906,25 +906,31 @@ async fn read_all_vmods(imports: Vec<VmodImport>, config: &Config) -> Definition
         .collect::<Vec<_>>();
 
     for vmod_fut in vmod_futures {
-        let result = vmod_fut.await;
-        if let Ok(Ok(Some(vmod))) = result {
-            let vmod_name = vmod.name;
-            let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
-                error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
-                continue;
-            };
-            let def = Definition {
-                ident_str: import.name.clone(),
-                r#type: Box::new(vmod.scope),
-                loc: Some(import.loc.clone()),
-                nested_pos: import.nested_pos.clone(),
-            };
-            definitions.properties.insert(import.name.clone(), def);
-        } else {
-            error!("Failed to read vmod library");
-            let inner_error = result.ok().and_then(|r| r.err());
-            if let Some(inner_error) = inner_error {
-                error!("Vmod load error: {}", inner_error);
+        match vmod_fut.await {
+            Ok(Ok(Some(vmod))) => {
+                let vmod_name = vmod.name;
+                let Some(import) = imports.iter().find(|import| import.name == vmod_name) else {
+                    error!("Failed to find {vmod_name}. Vmod aliases not yet supported.");
+                    continue;
+                };
+                definitions.properties.insert(
+                    import.name.clone(),
+                    Definition {
+                        ident_str: import.name.clone(),
+                        r#type: Box::new(vmod.scope),
+                        loc: Some(import.loc.clone()),
+                        nested_pos: import.nested_pos.clone(),
+                    },
+                );
+            }
+            Ok(Ok(None)) => {
+                error!("Vmod not found");
+            }
+            Ok(Err(err)) => {
+                error!("Failed to read vmod library: {}", err);
+            }
+            Err(err) => {
+                error!("Vmod load task failed: {}", err);
             }
         }
     }
