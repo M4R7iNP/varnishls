@@ -110,12 +110,18 @@ vmod_paths = ["/usr/lib/varnish-plus/vmods/"] # paths to directories containing 
 vcc_paths = ["/usr/src/varnish-cache/lib/"] # paths to directories containing vcc files (vmod definition files)
 vcl_paths = ["./", "/usr/share/varnish-plus/vcl/"] # paths to directories containing vcl (default ./)
 [lint]
+enabled = true
 prefer_else_if = "hint"
 prefer_lowercase_headers = "hint"
 prefer_custom_headers_without_prefix = false
+invalid_regex = "error"
+slow_regex = "warning"
 [formatter]
+enabled = true
 indent_size = 4
 format_large_ifs_style = "loose" # loose or tight
+autofix_else_ifs = true
+downcase_headers = true
 ```
 
 Allowed levels for linting rules are error, warning, info, and hint. Set to false to disable a rule.
