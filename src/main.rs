@@ -111,6 +111,9 @@ async fn main() -> ExitCode {
         );
     }
 
+    let cwd = std::env::current_dir().unwrap();
+    let config = read_config(&cwd).await.unwrap_or_default();
+
     match cli.command {
         Command::Lsp {
             stdio,
@@ -160,9 +163,6 @@ async fn main() -> ExitCode {
             };
 
             let now = std::time::Instant::now();
-            let cwd = std::env::current_dir().unwrap();
-            let config = read_config(&cwd).await.unwrap_or_default();
-            debug!("config: {config:?}");
             let Some(initial_file_path) = file_path.or(config.main_vcl.clone()) else {
                 error!(
                     "Missing VCL file path to lint. Either setup main_vcl in .varnishls.toml or point cmd arg to your main VCL file."
@@ -268,15 +268,14 @@ async fn main() -> ExitCode {
             }
         }
         Command::InspectVmod { name, path, json } => {
-            let vmod = if path.is_some() {
-                read_vmod_lib(name, PathBuf::from(path.unwrap()))
+            let vmod = match path {
+                Some(p) => read_vmod_lib(name, PathBuf::from(p))
                     .await
-                    .expect("Failed to parse vmod")
-            } else {
-                read_vmod_lib_by_name(name, vec![])
+                    .expect("Failed to parse vmod"),
+                None => read_vmod_lib_by_name(name, config.vmod_paths)
                     .await
                     .unwrap()
-                    .expect("VMOD not found")
+                    .expect("VMOD not found"),
             };
 
             if json {
@@ -289,12 +288,7 @@ async fn main() -> ExitCode {
                 println!("Vmod functions:");
                 for (name, t) in &obj.properties {
                     if let varnish_builtins::Type::Func(func) = t {
-                        println!(
-                            "{}.{}{}",
-                            vmod.name,
-                            name,
-                            func.get_signature_string()
-                        );
+                        println!("{}.{}{}", vmod.name, name, func.get_signature_string());
                     }
                 }
                 // TODO: print out structs returned by functions
@@ -312,8 +306,6 @@ async fn main() -> ExitCode {
             paths,
         } => {
             let mut exit_code = ExitCode::SUCCESS;
-            let cwd = std::env::current_dir().unwrap();
-            let config = read_config(&cwd).await.unwrap_or_default();
             let now = std::time::Instant::now();
             let paths_len = paths.len();
             for path in paths {
