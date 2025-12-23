@@ -56,6 +56,7 @@ pub struct VmodData {
     pub scope: Type,
 }
 
+// Convert a virtual memory address (VMA) inside the ELF image into a file offset so you can read the bytes directly from the file.
 fn vma_to_file_offset(elf: &Elf, vma: u64) -> Option<u64> {
     for ph in &elf.program_headers {
         if ph.p_type != goblin::elf::program_header::PT_LOAD {
@@ -295,6 +296,15 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>>
     Ok(Type::Obj(vmod_obj))
 }
 
+fn resolve_cstr_ptr(ptr: *const c_char, file: &[u8]) -> &str {
+    if ptr.is_null() {
+        return "";
+    }
+    unsafe { CStr::from_ptr(ptr.add(file.as_ptr().addr())) }
+        .to_str()
+        .unwrap_or_default()
+}
+
 pub async fn read_vmod_lib(
     vmod_name: String,
     path: PathBuf,
@@ -350,8 +360,7 @@ pub async fn read_vmod_lib(
         }
     }
 
-    let mut json: &str =
-        &(unsafe { CStr::from_ptr(json_file_offset.add(file.as_ptr().addr())) }.to_string_lossy());
+    let mut json: &str = resolve_cstr_ptr(json_file_offset, &file);
 
     if json.starts_with(VMOD_JSON_SPEC_STR) {
         json = json[VMOD_JSON_SPEC_STR.len()..json.find('\u{3}').unwrap()].as_ref();
@@ -373,15 +382,9 @@ pub async fn read_vmod_lib(
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
         name,
-        file_id: unsafe { CStr::from_ptr(vmd.file_id.add(file.as_ptr().addr())) }
-            .to_string_lossy()
-            .to_string(),
-        proto: unsafe { CStr::from_ptr(vmd.proto.add(file.as_ptr().addr())) }
-            .to_string_lossy()
-            .to_string(),
-        abi: unsafe { CStr::from_ptr(vmd.abi.add(file.as_ptr().addr())) }
-            .to_string_lossy()
-            .to_string(),
+        file_id: resolve_cstr_ptr(vmd.file_id, &file).to_string(),
+        proto: resolve_cstr_ptr(vmd.proto, &file).to_string(),
+        abi: resolve_cstr_ptr(vmd.abi, &file).to_string(),
         json: json.to_string(),
         scope: vmod_json_data,
     };
