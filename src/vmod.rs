@@ -2,11 +2,12 @@ use goblin::elf::Elf;
 use log::error;
 use serde_json::{self, Value as SerdeValue};
 use std::error::Error;
-use std::ffi::CStr;
-use std::os::raw::c_char;
+use std::ffi::{CStr, c_char};
 use std::path::PathBuf;
 
 use crate::varnish_builtins::{Func, FuncArg, Obj, Type};
+
+const VMOD_JSON_SPEC_STR: &str = "VMOD_JSON_SPEC\u{2}";
 
 #[repr(C)]
 #[derive(Debug)]
@@ -53,6 +54,22 @@ pub struct VmodData {
     pub json: String,
     pub abi: String,
     pub scope: Type,
+}
+
+// Convert a virtual memory address (VMA) inside the ELF image into a file offset so you can read the bytes directly from the file.
+fn vma_to_file_offset(elf: &Elf, vma: u64) -> Option<u64> {
+    for ph in &elf.program_headers {
+        if ph.p_type != goblin::elf::program_header::PT_LOAD {
+            continue;
+        }
+        let seg_vstart = ph.p_vaddr;
+        let seg_vend = ph.p_vaddr.saturating_add(ph.p_memsz);
+        if vma >= seg_vstart && vma < seg_vend {
+            let delta = vma - seg_vstart;
+            return Some(ph.p_offset + delta);
+        }
+    }
+    None
 }
 
 fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
@@ -279,6 +296,15 @@ pub fn parse_vmod_json(json: &str) -> Result<Type, Box<dyn Error + Send + Sync>>
     Ok(Type::Obj(vmod_obj))
 }
 
+fn resolve_cstr_ptr(ptr: *const c_char, file: &[u8]) -> &str {
+    if ptr.is_null() {
+        return "";
+    }
+    unsafe { CStr::from_ptr(ptr.add(file.as_ptr().addr())) }
+        .to_str()
+        .unwrap_or_default()
+}
+
 pub async fn read_vmod_lib(
     vmod_name: String,
     path: PathBuf,
@@ -306,37 +332,59 @@ pub async fn read_vmod_lib(
         .expect("Could not find section");
 
     // Offset in binary for symbol value
-    let offset = sec.sh_offset as usize + vmd_sym.st_value as usize - sec.sh_addr as usize;
+    let offset = (sec.sh_offset + (vmd_sym.st_value - sec.sh_addr)) as usize;
+
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
     #[allow(invalid_reference_casting)]
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
-    let mut json: &str =
-        &(unsafe { CStr::from_ptr(file[(vmd.json as usize)..].as_ptr() as *const c_char) }
-            .to_string_lossy());
+    let mut json_file_offset = vmd.json;
 
-    if json.starts_with("VMOD_JSON_SPEC\u{2}") {
-        json = &(json[(json.find('\u{2}').unwrap() + 1)..json.find('\u{3}').unwrap()]);
+    // Exception for dynamically relocated JSON data pointer
+    if json_file_offset.is_null() {
+        let json_struct_offset = core::mem::offset_of!(VmodDataCStruct, json);
+        let json_slot_vma = vmd_sym.st_value + json_struct_offset as u64; // Virtual Memory Address of the JSON pointer slot
+
+        let reloc = elf
+            .dynrelas
+            .iter()
+            .find(|rel| rel.r_offset == json_slot_vma)
+            .ok_or("Could not find relocation for VMOD JSON data")?;
+
+        if let Some(addend) = reloc.r_addend {
+            if let Some(file_offset) = vma_to_file_offset(&elf, addend as u64) {
+                json_file_offset = file_offset as *const i8;
+            }
+        } else {
+            return Err("VMOD JSON data pointer is null, could not resolve relocated VMA".into());
+        }
+    }
+
+    let mut json: &str = resolve_cstr_ptr(json_file_offset, &file);
+
+    if json.starts_with(VMOD_JSON_SPEC_STR) {
+        json = json[VMOD_JSON_SPEC_STR.len()..json.find('\u{3}').unwrap()].as_ref();
     }
 
     let vmod_json_data = parse_vmod_json(json)?;
+
+    let name: String = {
+        if vmd.name.is_null() {
+            vmod_name // fallback to provided name
+        } else {
+            unsafe { CStr::from_ptr(vmd.name.add(file.as_ptr().addr())) }
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+
     let data = VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
-        name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
-            .to_string_lossy()
-            .to_string(),
-        file_id: unsafe {
-            CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const c_char)
-        }
-        .to_string_lossy()
-        .to_string(),
-        proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const c_char) }
-            .to_string_lossy()
-            .to_string(),
-        abi: unsafe { CStr::from_ptr((file[(vmd.abi as usize)..].as_ptr()) as *const c_char) }
-            .to_string_lossy()
-            .to_string(),
+        name,
+        file_id: resolve_cstr_ptr(vmd.file_id, &file).to_string(),
+        proto: resolve_cstr_ptr(vmd.proto, &file).to_string(),
+        abi: resolve_cstr_ptr(vmd.abi, &file).to_string(),
         json: json.to_string(),
         scope: vmod_json_data,
     };
