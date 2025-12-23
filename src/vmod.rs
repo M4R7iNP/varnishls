@@ -55,6 +55,21 @@ pub struct VmodData {
     pub scope: Type,
 }
 
+fn vma_to_file_offset(elf: &Elf, vma: u64) -> Option<u64> {
+    for ph in &elf.program_headers {
+        if ph.p_type != goblin::elf::program_header::PT_LOAD {
+            continue;
+        }
+        let seg_vstart = ph.p_vaddr;
+        let seg_vend = ph.p_vaddr.saturating_add(ph.p_memsz);
+        if vma >= seg_vstart && vma < seg_vend {
+            let delta = vma - seg_vstart;
+            return Some(ph.p_offset + delta);
+        }
+    }
+    None
+}
+
 fn parse_vmod_func_args(serde_value_arr: &[SerdeValue]) -> Vec<FuncArg> {
     serde_value_arr
         .iter()
@@ -306,13 +321,36 @@ pub async fn read_vmod_lib(
         .expect("Could not find section");
 
     // Offset in binary for symbol value
-    let offset = sec.sh_offset as usize + vmd_sym.st_value as usize - sec.sh_addr as usize;
+    let offset = (sec.sh_offset + (vmd_sym.st_value - sec.sh_addr)) as usize;
+
     // Transmute a pointer to the offset in the file, into a pointer to a VmodDataCStruct
     #[allow(invalid_reference_casting)]
     let vmd = unsafe { &*std::mem::transmute::<*const u8, *const VmodDataCStruct>(&file[offset]) };
 
+    let mut json_file_offset = vmd.json;
+
+    // Exception for dynamically relocated JSON data pointer
+    if json_file_offset.is_null() {
+        let json_struct_offset = core::mem::offset_of!(VmodDataCStruct, json);
+        let json_slot_vma = vmd_sym.st_value + json_struct_offset as u64; // Virtual Memory Address of the JSON pointer slot
+
+        let reloc = elf
+            .dynrelas
+            .iter()
+            .find(|rel| rel.r_offset == json_slot_vma)
+            .ok_or("Could not find relocation for VMOD JSON data")?;
+
+        if let Some(addend) = reloc.r_addend {
+            if let Some(file_offset) = vma_to_file_offset(&elf, addend as u64) {
+                json_file_offset = file_offset as *const i8;
+            }
+        } else {
+            return Err("VMOD JSON data pointer is null, could not resolve relocated VMA".into());
+        }
+    }
+
     let mut json: &str =
-        &(unsafe { CStr::from_ptr(file[(vmd.json as usize)..].as_ptr() as *const c_char) }
+        &(unsafe { CStr::from_ptr(file[json_file_offset.addr()..].as_ptr() as *const c_char) }
             .to_string_lossy());
 
     if json.starts_with("VMOD_JSON_SPEC\u{2}") {
@@ -320,12 +358,21 @@ pub async fn read_vmod_lib(
     }
 
     let vmod_json_data = parse_vmod_json(json)?;
+
+    let name: String = {
+        if vmd.name.is_null() {
+            vmod_name // fallback to provided name
+        } else {
+            unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+
     let data = VmodData {
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
-        name: unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
-            .to_string_lossy()
-            .to_string(),
+        name,
         file_id: unsafe {
             CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const c_char)
         }
