@@ -2,11 +2,12 @@ use goblin::elf::Elf;
 use log::error;
 use serde_json::{self, Value as SerdeValue};
 use std::error::Error;
-use std::ffi::CStr;
-use std::os::raw::c_char;
+use std::ffi::{CStr, c_char};
 use std::path::PathBuf;
 
 use crate::varnish_builtins::{Func, FuncArg, Obj, Type};
+
+const VMOD_JSON_SPEC_STR: &str = "VMOD_JSON_SPEC\u{2}";
 
 #[repr(C)]
 #[derive(Debug)]
@@ -350,11 +351,10 @@ pub async fn read_vmod_lib(
     }
 
     let mut json: &str =
-        &(unsafe { CStr::from_ptr(file[json_file_offset.addr()..].as_ptr() as *const c_char) }
-            .to_string_lossy());
+        &(unsafe { CStr::from_ptr(json_file_offset.add(file.as_ptr().addr())) }.to_string_lossy());
 
-    if json.starts_with("VMOD_JSON_SPEC\u{2}") {
-        json = &(json[(json.find('\u{2}').unwrap() + 1)..json.find('\u{3}').unwrap()]);
+    if json.starts_with(VMOD_JSON_SPEC_STR) {
+        json = json[VMOD_JSON_SPEC_STR.len()..json.find('\u{3}').unwrap()].as_ref();
     }
 
     let vmod_json_data = parse_vmod_json(json)?;
@@ -363,7 +363,7 @@ pub async fn read_vmod_lib(
         if vmd.name.is_null() {
             vmod_name // fallback to provided name
         } else {
-            unsafe { CStr::from_ptr((file[(vmd.name as usize)..].as_ptr()) as *const c_char) }
+            unsafe { CStr::from_ptr(vmd.name.add(file.as_ptr().addr())) }
                 .to_string_lossy()
                 .to_string()
         }
@@ -373,15 +373,13 @@ pub async fn read_vmod_lib(
         vrt_major: vmd.vrt_major as usize,
         vrt_minor: vmd.vrt_minor as usize,
         name,
-        file_id: unsafe {
-            CStr::from_ptr((file[(vmd.file_id as usize)..].as_ptr()) as *const c_char)
-        }
-        .to_string_lossy()
-        .to_string(),
-        proto: unsafe { CStr::from_ptr((file[(vmd.proto as usize)..].as_ptr()) as *const c_char) }
+        file_id: unsafe { CStr::from_ptr(vmd.file_id.add(file.as_ptr().addr())) }
             .to_string_lossy()
             .to_string(),
-        abi: unsafe { CStr::from_ptr((file[(vmd.abi as usize)..].as_ptr()) as *const c_char) }
+        proto: unsafe { CStr::from_ptr(vmd.proto.add(file.as_ptr().addr())) }
+            .to_string_lossy()
+            .to_string(),
+        abi: unsafe { CStr::from_ptr(vmd.abi.add(file.as_ptr().addr())) }
             .to_string_lossy()
             .to_string(),
         json: json.to_string(),
